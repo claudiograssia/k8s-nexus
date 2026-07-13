@@ -1,0 +1,372 @@
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
+import { api } from "@/lib/api";
+import {
+  isAppError,
+  type ContextInfo,
+  type ExecTarget,
+  type KubeconfigSummary,
+  type LogTarget,
+  type ToolStatus,
+} from "@/lib/types";
+
+export type TabView =
+  | "dashboard"
+  | "resources"
+  | "finops"
+  | "networking"
+  | "iam";
+
+export type NamespaceMode = "all" | "single" | "multi";
+
+export interface ClusterTab {
+  id: string;
+  context: string;
+  title: string;
+  view: TabView;
+  /** Active resource catalog id when `view === "resources"`. */
+  resourceId: string;
+  /** Selected namespaces; empty means "all namespaces". */
+  namespaces: string[];
+  namespaceMode: NamespaceMode;
+}
+
+export interface Favorite {
+  id: string;
+  kind: "cluster" | "resource" | "namespace";
+  context: string;
+  label: string;
+  resourceId?: string;
+  namespace?: string;
+}
+
+export interface Toast {
+  id: string;
+  tone: "info" | "success" | "error";
+  message: string;
+}
+
+export interface GkeAuthPrompt {
+  context: string;
+  message: string;
+}
+
+let counter = 0;
+const uid = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${counter++}`;
+
+interface AppState {
+  // Startup
+  init: () => Promise<void>;
+
+  // Contexts
+  summary: KubeconfigSummary | null;
+  contextsLoading: boolean;
+  loadContexts: () => Promise<void>;
+  contextByName: (name: string) => ContextInfo | undefined;
+
+  // External tools + kubeconfig path
+  tools: ToolStatus | null;
+  loadTools: () => Promise<void>;
+  kubeconfigPath: string;
+  applyKubeconfigPath: (path: string) => Promise<void>;
+
+  // Namespace cache per context
+  namespacesByContext: Record<string, string[]>;
+  loadNamespaces: (context: string) => Promise<void>;
+
+  // Tabs
+  tabs: ClusterTab[];
+  activeTabId: string | null;
+  openTab: (
+    context: string,
+    opts?: { view?: TabView; resourceId?: string; namespace?: string },
+  ) => void;
+  closeTab: (id: string) => void;
+  setActiveTab: (id: string) => void;
+  updateTab: (id: string, patch: Partial<ClusterTab>) => void;
+  activeTab: () => ClusterTab | undefined;
+
+  // Favorites
+  favorites: Favorite[];
+  addFavorite: (fav: Omit<Favorite, "id">) => void;
+  removeFavorite: (id: string) => void;
+  isFavorite: (predicate: Partial<Favorite>) => boolean;
+
+  // Bottom docked panels (mutually exclusive): terminal, logs, port-forwards
+  terminalOpen: boolean;
+  setTerminalOpen: (v: boolean) => void;
+  /** When set, the terminal runs a pod exec/attach instead of a cluster shell. */
+  execTarget: ExecTarget | null;
+  openExecTerminal: (target: ExecTarget) => void;
+  logTarget: LogTarget | null;
+  openLogs: (target: LogTarget) => void;
+  closeLogs: () => void;
+  portForwardOpen: boolean;
+  setPortForwardOpen: (v: boolean) => void;
+
+  // Safe mode
+  safeContexts: string[];
+  loadSafeContexts: () => Promise<void>;
+  toggleSafeMode: (context: string) => Promise<void>;
+  isSafe: (context: string) => boolean;
+
+  // Toasts + GKE auth healing
+  toasts: Toast[];
+  pushToast: (tone: Toast["tone"], message: string) => void;
+  dismissToast: (id: string) => void;
+  gkeAuthPrompt: GkeAuthPrompt | null;
+  setGkeAuthPrompt: (p: GkeAuthPrompt | null) => void;
+  reportError: (e: unknown, context?: string) => void;
+}
+
+export const useAppStore = create<AppState>()(
+  persist(
+    (set, get) => ({
+      async init() {
+        const path = get().kubeconfigPath?.trim();
+        if (path) {
+          try {
+            await api.setKubeconfigPath(path);
+          } catch {
+            /* fall through to default kubeconfig */
+          }
+        }
+        await get().loadContexts();
+        void get().loadSafeContexts();
+        void get().loadTools();
+      },
+
+      summary: null,
+      contextsLoading: false,
+      async loadContexts() {
+        set({ contextsLoading: true });
+        try {
+          const summary = await api.listContexts();
+          set({ summary, contextsLoading: false });
+        } catch (e) {
+          set({ contextsLoading: false });
+          get().reportError(e);
+        }
+      },
+      contextByName(name) {
+        return get().summary?.contexts.find((c) => c.name === name);
+      },
+
+      tools: null,
+      async loadTools() {
+        try {
+          set({ tools: await api.checkTools() });
+        } catch {
+          /* ignore */
+        }
+      },
+      kubeconfigPath: "",
+      async applyKubeconfigPath(path) {
+        const trimmed = path.trim();
+        try {
+          const summary = await api.setKubeconfigPath(trimmed || null);
+          // Contexts changed: close open tabs and drop cached namespaces.
+          set({
+            kubeconfigPath: trimmed,
+            summary,
+            tabs: [],
+            activeTabId: null,
+            namespacesByContext: {},
+          });
+          get().pushToast(
+            "success",
+            trimmed ? `Kubeconfig: ${trimmed}` : "Kubeconfig reset to default",
+          );
+        } catch (e) {
+          get().reportError(e);
+        }
+      },
+
+      namespacesByContext: {},
+      async loadNamespaces(context) {
+        try {
+          const items = await api.listResources(context, {
+            group: "",
+            version: "v1",
+            kind: "Namespace",
+            plural: "namespaces",
+            namespaced: false,
+          });
+          const names = items
+            .map((i) => i.metadata?.name ?? "")
+            .filter(Boolean)
+            .sort();
+          set((s) => ({
+            namespacesByContext: { ...s.namespacesByContext, [context]: names },
+          }));
+        } catch (e) {
+          // Silent: this is a background load with its own retry. On an auth
+          // failure (e.g. expired GKE token at cold start) drop the cached
+          // client so the next attempt rebuilds with fresh credentials.
+          if (isAppError(e) && (e.kind === "auth" || e.kind === "gkeAuth")) {
+            void api.invalidateClient(context);
+          }
+        }
+      },
+
+      tabs: [],
+      activeTabId: null,
+      openTab(context, opts) {
+        const id = uid("tab");
+        const tab: ClusterTab = {
+          id,
+          context,
+          title: shortClusterName(context),
+          view: opts?.view ?? "dashboard",
+          resourceId: opts?.resourceId ?? "pods",
+          namespaces: opts?.namespace ? [opts.namespace] : [],
+          namespaceMode: opts?.namespace ? "single" : "all",
+        };
+        set((s) => ({ tabs: [...s.tabs, tab], activeTabId: id }));
+        void get().loadNamespaces(context);
+      },
+      closeTab(id) {
+        set((s) => {
+          const tabs = s.tabs.filter((t) => t.id !== id);
+          let activeTabId = s.activeTabId;
+          if (activeTabId === id) {
+            activeTabId = tabs.length ? tabs[tabs.length - 1].id : null;
+          }
+          return { tabs, activeTabId };
+        });
+      },
+      setActiveTab(id) {
+        set({ activeTabId: id });
+      },
+      updateTab(id, patch) {
+        set((s) => ({
+          tabs: s.tabs.map((t) => (t.id === id ? { ...t, ...patch } : t)),
+        }));
+      },
+      activeTab() {
+        const s = get();
+        return s.tabs.find((t) => t.id === s.activeTabId);
+      },
+
+      favorites: [],
+      addFavorite(fav) {
+        set((s) => ({ favorites: [...s.favorites, { ...fav, id: uid("fav") }] }));
+      },
+      removeFavorite(id) {
+        set((s) => ({ favorites: s.favorites.filter((f) => f.id !== id) }));
+      },
+      isFavorite(predicate) {
+        return get().favorites.some((f) =>
+          Object.entries(predicate).every(
+            ([k, v]) => (f as unknown as Record<string, unknown>)[k] === v,
+          ),
+        );
+      },
+
+      terminalOpen: false,
+      setTerminalOpen(v) {
+        // Opening the cluster shell clears any exec target and other panels.
+        set(
+          v
+            ? { terminalOpen: true, execTarget: null, logTarget: null, portForwardOpen: false }
+            : { terminalOpen: false },
+        );
+      },
+      execTarget: null,
+      openExecTerminal(target) {
+        set({
+          execTarget: target,
+          terminalOpen: true,
+          logTarget: null,
+          portForwardOpen: false,
+        });
+      },
+      logTarget: null,
+      openLogs(target) {
+        set({ logTarget: target, terminalOpen: false, portForwardOpen: false });
+      },
+      closeLogs() {
+        set({ logTarget: null });
+      },
+      portForwardOpen: false,
+      setPortForwardOpen(v) {
+        set(v ? { portForwardOpen: true, terminalOpen: false, logTarget: null } : { portForwardOpen: false });
+      },
+
+      safeContexts: [],
+      async loadSafeContexts() {
+        try {
+          const list = await api.getSafeContexts();
+          set({ safeContexts: list });
+        } catch (e) {
+          get().reportError(e);
+        }
+      },
+      async toggleSafeMode(context) {
+        const enabled = !get().isSafe(context);
+        try {
+          await api.setSafeMode(context, enabled);
+          set((s) => ({
+            safeContexts: enabled
+              ? [...s.safeContexts, context]
+              : s.safeContexts.filter((c) => c !== context),
+          }));
+          get().pushToast(
+            "info",
+            enabled
+              ? `Safe Mode ON for ${shortClusterName(context)} — writes disabled`
+              : `Safe Mode OFF for ${shortClusterName(context)}`,
+          );
+        } catch (e) {
+          get().reportError(e, context);
+        }
+      },
+      isSafe(context) {
+        return get().safeContexts.includes(context);
+      },
+
+      toasts: [],
+      pushToast(tone, message) {
+        const id = uid("toast");
+        set((s) => ({ toasts: [...s.toasts, { id, tone, message }] }));
+        setTimeout(() => get().dismissToast(id), 6000);
+      },
+      dismissToast(id) {
+        set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
+      },
+      gkeAuthPrompt: null,
+      setGkeAuthPrompt(p) {
+        set({ gkeAuthPrompt: p });
+      },
+      reportError(e, context) {
+        if (isAppError(e)) {
+          // Drop the cached (possibly stale) client so polling self-heals.
+          if (context && (e.kind === "auth" || e.kind === "gkeAuth")) {
+            void api.invalidateClient(context);
+          }
+          if (e.kind === "gkeAuth" && context) {
+            set({ gkeAuthPrompt: { context, message: e.message } });
+          }
+          get().pushToast("error", e.message);
+        } else {
+          get().pushToast("error", String(e));
+        }
+      },
+    }),
+    {
+      name: "kubenexus-store",
+      // Only persist the user's saved preferences, not live cluster data.
+      partialize: (s) =>
+        ({ favorites: s.favorites, kubeconfigPath: s.kubeconfigPath }) as AppState,
+    },
+  ),
+);
+
+/** `gke_project_region_cluster` -> `cluster`. */
+export function shortClusterName(context: string): string {
+  if (context.startsWith("gke_")) {
+    const parts = context.split("_");
+    return parts[parts.length - 1] || context;
+  }
+  return context;
+}

@@ -1,0 +1,68 @@
+[package]
+name = "kubenexus-gke"
+version = "0.1.0"
+description = "KubeNexus GKE — ultra-fast multi-cluster Kubernetes IDE for GKE"
+authors = ["KubeNexus"]
+edition = "2021"
+rust-version = "1.85"
+
+# The library that holds all app logic (Tauri v2 convention; also enables mobile targets).
+[lib]
+name = "kubenexus_gke_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+
+# Kubernetes
+kube = { version = "0.96", default-features = false, features = [
+    "client",
+    "config",
+    "ws",
+    "rustls-tls",
+] }
+k8s-openapi = { version = "0.23", features = ["latest"] }
+# Pull in rustls with the `ring` provider so we can install it as the process
+# default before kube builds any TLS client. Without this, kube 0.96 falls back
+# to aws-lc-rs, which fails the GKE TLS handshake on Windows ("client error (Connect)").
+rustls = { version = "0.23", features = ["ring"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+
+# Utilities
+anyhow = "1"
+thiserror = "1"
+regex = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dirs = "5"
+chrono = { version = "0.4", features = ["serde"] }
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+parking_lot = "0.12"
+# Embedded terminal (cross-platform PTY: ConPTY on Windows).
+portable-pty = "0.8"
+
+[features]
+# By default Tauri expects a `custom-protocol` feature in release.
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

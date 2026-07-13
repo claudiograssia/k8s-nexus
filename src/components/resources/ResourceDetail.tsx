@@ -1,0 +1,142 @@
+import { useState } from "react";
+import { X, ScrollText, Scaling, RotateCw, SquareTerminal, FolderTree } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { cn, objNamespace } from "@/lib/utils";
+import type { ResourceType } from "@/lib/catalog";
+import { supportsLogs } from "@/lib/catalog";
+import type { KubeObject } from "@/lib/types";
+import { YamlEditor } from "@/components/yaml/YamlEditor";
+import { ConfigMapDetail } from "./detail/ConfigMapDetail";
+import { SecretDetail } from "./detail/SecretDetail";
+import { PodDetail } from "./detail/PodDetail";
+import { ServiceAccountDetail } from "./detail/ServiceAccountDetail";
+import { GenericDetail } from "./detail/GenericDetail";
+import { RevisionsPanel } from "./detail/RevisionsPanel";
+
+interface Props {
+  context: string;
+  resourceType: ResourceType;
+  obj: KubeObject;
+  readOnly: boolean;
+  onClose: () => void;
+  onOpenLogs: (obj: KubeObject) => void;
+  onScale: (obj: KubeObject) => void;
+  onRestart: (obj: KubeObject) => void;
+  onExec: (obj: KubeObject) => void;
+  onFiles: (obj: KubeObject) => void;
+}
+
+function Overview({ resourceType, obj }: { resourceType: ResourceType; obj: KubeObject }) {
+  switch (resourceType.detail) {
+    case "pod":
+      return <PodDetail obj={obj} />;
+    case "configmap":
+      return <ConfigMapDetail obj={obj} />;
+    case "secret":
+      return <SecretDetail obj={obj} />;
+    case "serviceaccount":
+      return <ServiceAccountDetail obj={obj} />;
+    default:
+      return <GenericDetail obj={obj} />;
+  }
+}
+
+export function ResourceDetail({
+  context,
+  resourceType,
+  obj,
+  readOnly,
+  onClose,
+  onOpenLogs,
+  onScale,
+  onRestart,
+  onExec,
+  onFiles,
+}: Props) {
+  const [tab, setTab] = useState<"overview" | "yaml" | "revisions">("overview");
+  const name = obj.metadata?.name ?? "";
+  const namespace = objNamespace(obj) ?? null;
+  const canLogs = supportsLogs(resourceType);
+  const isPod = resourceType.detail === "pod";
+  const hasRevisions = resourceType.id === "deployments";
+  const tabs: Array<"overview" | "yaml" | "revisions"> = hasRevisions
+    ? ["overview", "revisions", "yaml"]
+    : ["overview", "yaml"];
+
+  return (
+    <div className="flex h-full w-[560px] shrink-0 flex-col border-l border-border bg-card/60">
+      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-[13px] font-semibold">{name}</p>
+          <p className="truncate text-[11px] text-muted-foreground">
+            {resourceType.gvk.kind}
+            {namespace ? ` · ${namespace}` : ""}
+          </p>
+        </div>
+        {isPod && (
+          <Button size="xs" variant="outline" onClick={() => onExec(obj)}>
+            <SquareTerminal /> Shell
+          </Button>
+        )}
+        {isPod && (
+          <Button size="xs" variant="outline" onClick={() => onFiles(obj)}>
+            <FolderTree /> Files
+          </Button>
+        )}
+        {canLogs && (
+          <Button size="xs" variant="outline" onClick={() => onOpenLogs(obj)}>
+            <ScrollText /> Logs
+          </Button>
+        )}
+        {resourceType.restartable && (
+          <Button size="xs" variant="outline" onClick={() => onRestart(obj)} disabled={readOnly}>
+            <RotateCw /> Restart
+          </Button>
+        )}
+        {resourceType.scalable && (
+          <Button size="xs" variant="outline" onClick={() => onScale(obj)} disabled={readOnly}>
+            <Scaling /> Scale
+          </Button>
+        )}
+        <Button size="iconSm" variant="ghost" onClick={onClose}>
+          <X />
+        </Button>
+      </div>
+
+      <div className="flex items-center gap-1 border-b border-border px-2 py-1">
+        {tabs.map((t) => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={cn(
+              "rounded-md px-2 py-1 text-[12px] capitalize transition-colors",
+              tab === t ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {t === "yaml" ? "YAML" : t}
+          </button>
+        ))}
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-hidden">
+        {tab === "overview" ? (
+          <div className="h-full overflow-y-auto p-3">
+            <Overview resourceType={resourceType} obj={obj} />
+          </div>
+        ) : tab === "revisions" ? (
+          <div className="h-full overflow-y-auto">
+            <RevisionsPanel context={context} obj={obj} namespace={namespace} />
+          </div>
+        ) : (
+          <YamlEditor
+            context={context}
+            spec={resourceType.gvk}
+            namespace={namespace}
+            name={name}
+            readOnly={readOnly}
+          />
+        )}
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Default capability set for the KubeNexus GKE main window.","local":true,"windows":["main"],"permissions":["core:default","core:window:allow-start-dragging","core:event:default","shell:allow-open","dialog:allow-save","dialog:allow-open","dialog:allow-message","opener:allow-open-url","opener:default"]}}
