@@ -1,7 +1,10 @@
-import { AlertTriangle, ShieldAlert, Boxes } from "lucide-react";
+import { AlertTriangle, ShieldAlert, Boxes, Stethoscope, CircleCheck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Field, MetaBlock } from "./parts";
 import type { KubeObject } from "@/lib/types";
+import { diagnosePod, type Finding } from "@/lib/diagnose";
+import { cn } from "@/lib/utils";
+import { useObjectEvents } from "./EventsPanel";
 
 interface Container {
   name?: string;
@@ -55,7 +58,46 @@ function lint(pod: KubeObject): { tone: "err" | "warn"; text: string }[] {
   return findings;
 }
 
-export function PodDetail({ obj }: { obj: KubeObject }) {
+const SEVERITY_CLASS: Record<Finding["severity"], string> = {
+  err: "border-[hsl(var(--err)/0.4)] bg-[hsl(var(--err)/0.06)]",
+  warn: "border-[hsl(var(--warn)/0.4)] bg-[hsl(var(--warn)/0.06)]",
+  info: "border-border bg-background/50",
+};
+
+/** "Why is this pod not working?" — status, container states and events in one place. */
+function Diagnosis({ context, obj }: { context: string; obj: KubeObject }) {
+  const { events, loading } = useObjectEvents(context, obj);
+  const findings = diagnosePod(obj, events);
+  return (
+    <div>
+      <p className="mb-1 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <Stethoscope className="size-3.5" /> Diagnosis
+      </p>
+      {findings.length === 0 ? (
+        <p className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
+          <CircleCheck className="size-3.5 text-[hsl(var(--ok))]" />
+          {loading ? "No problems in the pod status; checking events…" : "No problems found."}
+        </p>
+      ) : (
+        <ul className="space-y-1">
+          {findings.map((f, i) => (
+            <li key={i} className={cn("rounded-md border p-2 text-[12px]", SEVERITY_CLASS[f.severity])}>
+              <p className="font-medium">{f.title}</p>
+              {f.detail && (
+                <p className="mt-0.5 select-text whitespace-pre-wrap break-words font-mono text-[11px] text-muted-foreground">
+                  {f.detail}
+                </p>
+              )}
+              {f.hint && <p className="mt-1 text-[11px] text-foreground/80">{f.hint}</p>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+export function PodDetail({ context, obj }: { context: string; obj: KubeObject }) {
   const spec = (obj.spec ?? {}) as Record<string, unknown>;
   const status = (obj.status ?? {}) as Record<string, unknown>;
   const containers = (spec.containers as Container[]) ?? [];
@@ -88,6 +130,8 @@ export function PodDetail({ obj }: { obj: KubeObject }) {
           ))
         )}
       </div>
+
+      <Diagnosis context={context} obj={obj} />
 
       <div className="rounded-md border border-border p-2">
         <Field label="Node">{String(spec.nodeName ?? "—")}</Field>

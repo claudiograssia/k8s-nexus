@@ -30,10 +30,10 @@ interface Props {
   onFiles: (obj: KubeObject) => void;
 }
 
-function Overview({ resourceType, obj }: { resourceType: ResourceType; obj: KubeObject }) {
+function Overview({ context, resourceType, obj }: { context: string; resourceType: ResourceType; obj: KubeObject }) {
   switch (resourceType.detail) {
     case "pod":
-      return <PodDetail obj={obj} />;
+      return <PodDetail context={context} obj={obj} />;
     case "configmap":
       return <ConfigMapDetail obj={obj} />;
     case "secret":
@@ -133,7 +133,7 @@ export function ResourceDetail({
       <div className="min-h-0 flex-1 overflow-hidden">
         {tab === "overview" ? (
           <div className="h-full overflow-y-auto p-3">
-            <Overview resourceType={resourceType} obj={obj} />
+            <Overview context={context} resourceType={resourceType} obj={obj} />
           </div>
         ) : tab === "events" ? (
           <div className="h-full overflow-y-auto">

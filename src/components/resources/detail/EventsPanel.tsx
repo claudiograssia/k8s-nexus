@@ -13,7 +13,7 @@ const EVENT_GVK: GvkSpec = { group: "", version: "v1", kind: "Event", plural: "e
  * namespaced object live in its namespace; those of cluster-scoped objects
  * (nodes, PVs) usually in `default`, so they are looked up cluster-wide.
  */
-export function EventsPanel({ context, obj }: { context: string; obj: KubeObject }) {
+export function useObjectEvents(context: string, obj: KubeObject) {
   const uid = obj.metadata?.uid;
   const namespace = obj.metadata?.namespace;
   const selection = useMemo(
@@ -36,6 +36,12 @@ export function EventsPanel({ context, obj }: { context: string; obj: KubeObject
     () => [...items].sort((a, b) => tsOf(eventTime(b)) - tsOf(eventTime(a))),
     [items],
   );
+  return { events, loading, error };
+}
+
+/** Events tab of the detail panel. */
+export function EventsPanel({ context, obj }: { context: string; obj: KubeObject }) {
+  const { events, loading, error } = useObjectEvents(context, obj);
 
   if (error != null && events.length === 0) {
     const forbidden = isAppError(error) && error.kind === "forbidden";
