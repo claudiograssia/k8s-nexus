@@ -4,6 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AccessCheck,
+  DiscoveryResult,
   DrainPod,
   FileEntry,
   GvkSpec,
@@ -42,6 +43,9 @@ export const api = {
       labelSelector: labelSelector ?? null,
       fieldSelector: fieldSelector ?? null,
     }),
+
+  /** Every listable kind the cluster serves (built-in and CRDs). */
+  discoverResources: (context: string) => invoke<DiscoveryResult>("discover_resources", { context }),
 
   /** One answer per check, in order; null = could not be determined. */
   checkAccess: (context: string, checks: AccessCheck[]) =>

@@ -2,6 +2,7 @@
 //! operations, metrics, log streaming and port-forwarding.
 
 pub mod access;
+pub mod discovery;
 pub mod client;
 pub mod config;
 pub mod logs;

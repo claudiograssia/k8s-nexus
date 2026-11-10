@@ -107,6 +107,15 @@ pub async fn list_resources(
 }
 
 #[tauri::command]
+pub async fn discover_resources(
+    state: State<'_, AppState>,
+    context: String,
+) -> AppResult<crate::kube::discovery::DiscoveryResult> {
+    let st = state.inner().clone();
+    crate::kube::discovery::discover(&st.clients, &context).await
+}
+
+#[tauri::command]
 pub async fn check_access(
     state: State<'_, AppState>,
     context: String,

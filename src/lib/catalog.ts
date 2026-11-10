@@ -909,3 +909,72 @@ export const CATEGORIES: Category[] = [
 export function resourcesByCategory(cat: Category): ResourceType[] {
   return CATALOG.filter((r) => r.category === cat);
 }
+
+// Discovered kinds -----------------------------------------------------------
+//
+// Kinds found through API discovery that the catalog does not describe. Their
+// id carries the whole GVK so a tab or favorite can be restored before
+// discovery has run again.
+
+const DISCOVERED_PREFIX = "api:";
+
+export function discoveredId(d: Pick<GvkSpec, "group" | "version" | "kind" | "plural" | "namespaced">): string {
+  return `${DISCOVERED_PREFIX}${[d.group, d.version, d.kind, d.plural, d.namespaced ? "1" : "0"].join("|")}`;
+}
+
+const CATALOG_KEYS = new Set(CATALOG.map((r) => `${r.gvk.group}/${r.gvk.plural}`));
+
+/** True when the catalog already has a hand-written entry for this kind. */
+export function inCatalog(d: { group: string; plural: string }): boolean {
+  return CATALOG_KEYS.has(`${d.group}/${d.plural}`);
+}
+
+function readyColumn(): ColumnDef {
+  const ready = (o: KubeObject) => {
+    const conds = (o.status as { conditions?: Array<{ type?: string; status?: string }> } | undefined)?.conditions;
+    return conds?.find((c) => c.type === "Ready" || c.type === "Available")?.status;
+  };
+  return {
+    key: "status",
+    header: "Status",
+    accessor: (o) => {
+      const r = ready(o);
+      if (r === "True") return "Ready";
+      if (r === "False") return "Not ready";
+      const phase = (o.status as { phase?: unknown } | undefined)?.phase;
+      return typeof phase === "string" ? phase : "—";
+    },
+    tone: (o) => {
+      const r = ready(o);
+      return r === "True" ? "ok" : r === "False" ? "warn" : "muted";
+    },
+    width: "110px",
+  };
+}
+
+const typeCache = new Map<string, ResourceType>();
+
+/** Resource type for a catalog id or a discovered-kind id. */
+export function resourceTypeById(id: string): ResourceType | undefined {
+  const known = CATALOG_BY_ID.get(id) ?? typeCache.get(id);
+  if (known || !id.startsWith(DISCOVERED_PREFIX)) return known;
+  const [group, version, kind, plural, ns] = id.slice(DISCOVERED_PREFIX.length).split("|");
+  if (!version || !kind || !plural) return undefined;
+  const namespaced = ns === "1";
+  const rt: ResourceType = {
+    id,
+    label: kind,
+    category: "GKE",
+    gvk: { group, version, kind, plural, namespaced },
+    columns: [
+      { key: "name", header: "Name", accessor: (o) => o.metadata?.name ?? "—" },
+      ...(namespaced
+        ? [{ key: "ns", header: "Namespace", accessor: (o: KubeObject) => o.metadata?.namespace ?? "—", width: "150px" }]
+        : []),
+      readyColumn(),
+      age,
+    ],
+  };
+  typeCache.set(id, rt);
+  return rt;
+}

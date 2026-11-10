@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Hint } from "@/components/ui/tooltip";
 import { CenteredSpinner } from "@/components/ui/spinner";
-import { CATALOG_BY_ID } from "@/lib/catalog";
+import { CATALOG_BY_ID, resourceTypeById } from "@/lib/catalog";
 import { api } from "@/lib/api";
 import { fetchScoped } from "@/lib/listing";
 import { actionsFor, checksFor, usePermissions } from "@/lib/permissions";
@@ -22,7 +22,7 @@ import { PodFilesDialog } from "./PodFilesDialog";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 
 export function ResourceView({ tab }: { tab: ClusterTab }) {
-  const resourceType = CATALOG_BY_ID.get(tab.resourceId) ?? CATALOG_BY_ID.get("pods")!;
+  const resourceType = resourceTypeById(tab.resourceId) ?? CATALOG_BY_ID.get("pods")!;
   const isSafe = useAppStore((s) => s.isSafe(tab.context));
   const pushToast = useAppStore((s) => s.pushToast);
   const reportError = useAppStore((s) => s.reportError);

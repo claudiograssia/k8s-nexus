@@ -36,6 +36,7 @@ pub fn run() {
             commands::set_kubeconfig_path,
             commands::invalidate_client,
             commands::list_resources,
+            commands::discover_resources,
             commands::check_access,
             commands::start_watch,
             commands::stop_watch,

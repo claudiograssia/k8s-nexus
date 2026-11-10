@@ -195,6 +195,22 @@ export interface AccessCheck {
   namespace?: string | null;
 }
 
+/** A listable kind served by the cluster (API discovery). */
+export interface DiscoveredResource {
+  group: string;
+  version: string;
+  kind: string;
+  plural: string;
+  namespaced: boolean;
+  verbs: string[];
+}
+
+export interface DiscoveryResult {
+  resources: DiscoveredResource[];
+  /** Group/versions that could not be queried (e.g. aggregated API down). */
+  failed: string[];
+}
+
 /** Live list request; must match Rust WatchRequest. */
 export interface WatchRequest {
   context: string;

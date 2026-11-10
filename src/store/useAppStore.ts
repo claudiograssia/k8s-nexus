@@ -4,6 +4,7 @@ import { api } from "@/lib/api";
 import {
   isAppError,
   type AccessCheck,
+  type DiscoveryResult,
   type ContextInfo,
   type ExecTarget,
   type KubeconfigSummary,
@@ -65,6 +66,7 @@ export function accessKey(context: string, c: AccessCheck): string {
   return [context, c.verb, c.group, c.resource, c.subresource ?? "", c.namespace ?? ""].join("|");
 }
 const accessInFlight = new Set<string>();
+const discoveryInFlight = new Set<string>();
 
 interface AppState {
   // Startup
@@ -96,6 +98,10 @@ interface AppState {
   // null = could not be determined (treated as allowed).
   access: Record<string, boolean | null>;
   ensureAccess: (context: string, checks: AccessCheck[]) => Promise<void>;
+
+  /** API discovery per context (not persisted). */
+  discovery: Record<string, DiscoveryResult | undefined>;
+  loadDiscovery: (context: string, force?: boolean) => Promise<void>;
 
   // Tabs
   tabs: ClusterTab[];
@@ -281,6 +287,20 @@ export const useAppStore = create<AppState>()(
           keys.forEach((k, i) => (access[k] = answers[i] ?? null));
           return { access };
         });
+      },
+
+      discovery: {},
+      async loadDiscovery(context, force = false) {
+        if ((!force && get().discovery[context]) || discoveryInFlight.has(context)) return;
+        discoveryInFlight.add(context);
+        try {
+          const result = await api.discoverResources(context);
+          set((s) => ({ discovery: { ...s.discovery, [context]: result } }));
+        } catch (e) {
+          get().reportError(e, context, { silent: true });
+        } finally {
+          discoveryInFlight.delete(context);
+        }
       },
 
       tabs: [],
