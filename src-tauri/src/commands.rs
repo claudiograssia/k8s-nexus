@@ -4,11 +4,13 @@
 //! Mode; read operations are always allowed.
 
 use crate::error::{AppError, AppResult};
+use crate::kube::access::AccessCheck;
 use crate::kube::config::KubeconfigSummary;
 use crate::kube::logs::LogRequest;
 use crate::kube::metrics::{NodeUsage, PodUsage};
 use crate::kube::portforward::{PortForwardInfo, PortForwardRequest};
 use crate::kube::resources::GvkSpec;
+use crate::kube::watch::WatchRequest;
 use crate::state::AppState;
 use crate::{gcp, terminal};
 use serde_json::Value;
@@ -100,6 +102,33 @@ pub async fn list_resources(
         label_selector.as_deref(),
     )
     .await
+}
+
+#[tauri::command]
+pub async fn check_access(
+    state: State<'_, AppState>,
+    context: String,
+    checks: Vec<AccessCheck>,
+) -> AppResult<Vec<Option<bool>>> {
+    let st = state.inner().clone();
+    crate::kube::access::check(&st.clients, &context, checks).await
+}
+
+#[tauri::command]
+pub async fn start_watch(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    watch_id: String,
+    request: WatchRequest,
+) -> AppResult<()> {
+    let st = state.inner().clone();
+    crate::kube::watch::start(app, &st.clients, &st.watches, watch_id, request).await
+}
+
+#[tauri::command]
+pub async fn stop_watch(state: State<'_, AppState>, watch_id: String) -> AppResult<()> {
+    state.watches.stop(&watch_id);
+    Ok(())
 }
 
 #[tauri::command]

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   LayoutDashboard,
   DollarSign,
@@ -6,14 +6,21 @@ import {
   KeyRound,
   ChevronRight,
   Star,
+  Lock,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
+  CATALOG,
   CATEGORIES,
   resourcesByCategory,
   type Category,
+  type ResourceType,
 } from "@/lib/catalog";
+import { usePermissions } from "@/lib/permissions";
+import type { AccessCheck } from "@/lib/types";
 import { useAppStore, shortClusterName, type ClusterTab, type TabView } from "@/store/useAppStore";
+
+const EMPTY: string[] = [];
 
 const VIEWS: { id: TabView; label: string; icon: typeof LayoutDashboard }[] = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -27,6 +34,29 @@ export function ResourceNav({ tab }: { tab: ClusterTab }) {
   const favorites = useAppStore((s) => s.favorites);
   const addFavorite = useAppStore((s) => s.addFavorite);
   const removeFavorite = useAppStore((s) => s.removeFavorite);
+  // Dim the kinds the user cannot list anywhere in the current selection.
+  const perms = usePermissions(tab.context);
+  const manual = useAppStore((s) => s.manualNamespaces[tab.context]) ?? EMPTY;
+  const defaultNs = useAppStore((s) => s.contextByName(tab.context)?.namespace ?? null);
+  const scopes = useMemo(() => {
+    if (tab.namespaceMode !== "all" && tab.namespaces.length > 0) return tab.namespaces;
+    return [...new Set(["", ...manual, ...(defaultNs ? [defaultNs] : [])])];
+  }, [tab.namespaceMode, tab.namespaces, manual, defaultNs]);
+  const listChecks = useMemo(
+    () => (r: ResourceType): AccessCheck[] =>
+      (r.gvk.namespaced ? scopes : [""]).map((ns) => ({
+        group: r.gvk.group,
+        resource: r.gvk.plural,
+        verb: "list",
+        namespace: ns || null,
+      })),
+    [scopes],
+  );
+  useEffect(() => {
+    void perms.ensure(CATALOG.flatMap(listChecks));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab.context, listChecks]);
+
   const [collapsed, setCollapsed] = useState<Record<Category, boolean>>({
     Cluster: false,
     Workloads: false,
@@ -76,6 +106,7 @@ export function ResourceNav({ tab }: { tab: ClusterTab }) {
                 <div className="pb-1">
                   {items.map((r) => {
                     const active = tab.view === "resources" && tab.resourceId === r.id;
+                    const denied = perms.deniedAll(listChecks(r));
                     const fav = favorites.find(
                       (f) => f.kind === "resource" && f.context === tab.context && f.resourceId === r.id,
                     );
@@ -88,9 +119,12 @@ export function ResourceNav({ tab }: { tab: ClusterTab }) {
                           active
                             ? "bg-accent text-foreground"
                             : "text-muted-foreground hover:bg-accent/40 hover:text-foreground",
+                          denied && !active && "opacity-45",
                         )}
+                        title={denied ? "You are not allowed to list this resource here" : undefined}
                       >
                         <span className="truncate">{r.label}</span>
+                        {denied && <Lock className="size-3 shrink-0" />}
                         <button
                           onClick={(e) => {
                             e.stopPropagation();

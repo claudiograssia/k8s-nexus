@@ -2,10 +2,9 @@ import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "r
 import ReactFlow, { Background, Controls, type Edge, type Node } from "reactflow";
 import "reactflow/dist/style.css";
 import { Network, RefreshCw, ShieldCheck } from "lucide-react";
-import { api } from "@/lib/api";
 import type { GvkSpec, KubeObject } from "@/lib/types";
 import { getNested } from "@/lib/catalog";
-import { namespaceScope } from "@/lib/scope";
+import { listScoped } from "@/lib/listing";
 import { getString, truncate } from "@/lib/utils";
 import { useAppStore, type ClusterTab } from "@/store/useAppStore";
 import { Badge } from "@/components/ui/badge";
@@ -132,19 +131,15 @@ export function NetworkingView({ tab }: { tab: ClusterTab }) {
   const load = useCallback(async () => {
     setLoading(true);
     const ctx = tab.context;
-    const scope = namespaceScope(tab);
-    const ns = scope.queryNamespace;
 
     // Core resources: failures are surfaced to the user.
     const [ing, svc] = await Promise.all([
-      api
-        .listResources(ctx, INGRESS_GVK, ns)
+      listScoped(ctx, tab, INGRESS_GVK)
         .catch((e: unknown) => {
           reportError(e, ctx);
           return [] as KubeObject[];
         }),
-      api
-        .listResources(ctx, SERVICE_GVK, ns)
+      listScoped(ctx, tab, SERVICE_GVK)
         .catch((e: unknown) => {
           reportError(e, ctx);
           return [] as KubeObject[];
@@ -153,17 +148,16 @@ export function NetworkingView({ tab }: { tab: ClusterTab }) {
 
     // CRDs that may not be installed: swallow failures (treat as empty).
     const [gw, routes, bcs] = await Promise.all([
-      api.listResources(ctx, GATEWAY_GVK, ns).catch(() => [] as KubeObject[]),
-      api.listResources(ctx, HTTPROUTE_GVK, ns).catch(() => [] as KubeObject[]),
-      api.listResources(ctx, BACKENDCONFIG_GVK, ns).catch(() => [] as KubeObject[]),
+      listScoped(ctx, tab, GATEWAY_GVK).catch(() => [] as KubeObject[]),
+      listScoped(ctx, tab, HTTPROUTE_GVK).catch(() => [] as KubeObject[]),
+      listScoped(ctx, tab, BACKENDCONFIG_GVK).catch(() => [] as KubeObject[]),
     ]);
 
-    const keep = (o: KubeObject) => scope.matches(o.metadata?.namespace);
-    setIngresses(ing.filter(keep));
-    setServices(svc.filter(keep));
-    setGateways(gw.filter(keep));
-    setHttproutes(routes.filter(keep));
-    setBackendConfigs(bcs.filter(keep));
+    setIngresses(ing);
+    setServices(svc);
+    setGateways(gw);
+    setHttproutes(routes);
+    setBackendConfigs(bcs);
     setLoading(false);
     setReady(true);
   }, [tab, reportError]);

@@ -1,14 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { RefreshCw, Search, Tag } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { RefreshCw, Radio, Search, Tag } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Hint } from "@/components/ui/tooltip";
 import { CenteredSpinner } from "@/components/ui/spinner";
 import { CATALOG_BY_ID } from "@/lib/catalog";
 import { api } from "@/lib/api";
-import { namespaceScope } from "@/lib/scope";
+import { fetchScoped } from "@/lib/listing";
+import { actionsFor, checksFor, usePermissions } from "@/lib/permissions";
 import { objKey, objNamespace } from "@/lib/utils";
-import type { KubeObject } from "@/lib/types";
+import type { KubeObject, PodUsage } from "@/lib/types";
+import { useResourceList } from "@/components/common/useResourceList";
+import { ListError } from "@/components/common/ListError";
 import { useAppStore, type ClusterTab } from "@/store/useAppStore";
 import { ResourceTable, type RowAction } from "./ResourceTable";
 import { ResourceDetail } from "./ResourceDetail";
@@ -23,8 +26,6 @@ export function ResourceView({ tab }: { tab: ClusterTab }) {
   const pushToast = useAppStore((s) => s.pushToast);
   const reportError = useAppStore((s) => s.reportError);
 
-  const [items, setItems] = useState<KubeObject[]>([]);
-  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [labelSelector, setLabelSelector] = useState("");
   const [appliedSelector, setAppliedSelector] = useState("");
@@ -37,48 +38,71 @@ export function ResourceView({ tab }: { tab: ClusterTab }) {
   const [drainTarget, setDrainTarget] = useState<string | null>(null);
   const [filesTarget, setFilesTarget] = useState<KubeObject | null>(null);
 
-  const scope = useMemo(() => namespaceScope(tab), [tab]);
+  const list = useResourceList({
+    context: tab.context,
+    spec: resourceType.gvk,
+    selection: tab,
+    labelSelector: appliedSelector || null,
+  });
+  const { refresh } = list;
+
+  // Live CPU/memory usage (metrics-server has no watch: polled).
+  const [usage, setUsage] = useState<Map<string, PodUsage>>(new Map());
   const namespacesKey = tab.namespaces.join(",") + tab.namespaceMode;
-  const firstLoad = useRef(true);
-
-  const fetchItems = useCallback(
-    async (showSpinner: boolean) => {
-      if (showSpinner) setLoading(true);
+  useEffect(() => {
+    setUsage(new Map());
+    if (!resourceType.podMetrics) return;
+    let alive = true;
+    const load = async () => {
       try {
-        const raw = await api.listResources(
+        const rows = await fetchScoped(
           tab.context,
-          resourceType.gvk,
-          scope.queryNamespace,
-          appliedSelector || null,
+          tab,
+          { id: "metrics.k8s.io/pods", namespaced: true },
+          "pod metrics",
+          (ns) => api.podUsage(tab.context, ns),
         );
-        const filtered = resourceType.gvk.namespaced
-          ? raw.filter((o) => scope.matches(objNamespace(o)))
-          : raw;
-
-        // Merge live CPU/memory usage (metrics-server) for pods.
-        let merged = filtered;
-        if (resourceType.podMetrics) {
-          try {
-            const usage = await api.podUsage(tab.context, scope.queryNamespace);
-            const byKey = new Map(usage.map((u) => [`${u.namespace}/${u.name}`, u]));
-            merged = filtered.map((o) => {
-              const u = byKey.get(`${o.metadata?.namespace ?? ""}/${o.metadata?.name ?? ""}`);
-              return u ? { ...o, __cpuMilli: u.cpuMilli, __memBytes: u.memoryBytes } : o;
-            });
-          } catch {
-            /* metrics-server unavailable — CPU/Memory columns stay empty */
-          }
-        }
-        setItems(merged);
-      } catch (e) {
-        reportError(e, tab.context);
-      } finally {
-        setLoading(false);
-        firstLoad.current = false;
+        if (alive) setUsage(new Map(rows.map((u) => [`${u.namespace}/${u.name}`, u])));
+      } catch {
+        /* metrics-server unavailable — CPU/Memory columns stay empty */
       }
-    },
+    };
+    void load();
+    const t = setInterval(() => void load(), 15_000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [tab.context, resourceType.id, namespacesKey, appliedSelector],
+  }, [tab.context, resourceType.id, namespacesKey]);
+
+  const items = useMemo(() => {
+    if (usage.size === 0) return list.items;
+    return list.items.map((o) => {
+      const u = usage.get(`${o.metadata?.namespace ?? ""}/${o.metadata?.name ?? ""}`);
+      return u ? { ...o, __cpuMilli: u.cpuMilli, __memBytes: u.memoryBytes } : o;
+    });
+  }, [list.items, usage]);
+  const loading = list.loading;
+
+  // Ask the cluster which actions are allowed, per namespace of the rows.
+  const perms = usePermissions(tab.context);
+  const rowNamespaces = useMemo(() => {
+    if (!resourceType.gvk.namespaced) return [null];
+    return [...new Set(items.map((o) => objNamespace(o) ?? null))].slice(0, 30);
+  }, [items, resourceType.gvk.namespaced]);
+  const rowNamespacesKey = rowNamespaces.join(",");
+  useEffect(() => {
+    const actions = actionsFor(resourceType);
+    void perms.ensure(
+      rowNamespaces.flatMap((ns) => actions.flatMap((a) => checksFor(a, resourceType, ns))),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab.context, resourceType.id, rowNamespacesKey]);
+  const allowed = useCallback(
+    (action: RowAction, obj: KubeObject) =>
+      perms.can(checksFor(action, resourceType, objNamespace(obj) ?? null)),
+    [perms, resourceType],
   );
 
   // Debounce the label selector before it triggers a refetch.
@@ -91,16 +115,15 @@ export function ResourceView({ tab }: { tab: ClusterTab }) {
   useEffect(() => {
     setSelected(null);
     setSearch("");
-    firstLoad.current = true;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resourceType.id]);
 
-  // Fetch + poll.
+  // Keep the open detail panel in sync with live updates.
   useEffect(() => {
-    void fetchItems(true);
-    const t = setInterval(() => void fetchItems(false), 8000);
-    return () => clearInterval(t);
-  }, [fetchItems]);
+    if (!selected) return;
+    const fresh = items.find((o) => objKey(o) === objKey(selected));
+    if (fresh && fresh !== selected) setSelected(fresh);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items]);
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -172,7 +195,6 @@ export function ResourceView({ tab }: { tab: ClusterTab }) {
           try {
             await api.restartResource(tab.context, resourceType.gvk, ns, name);
             pushToast("success", `Restarting ${resourceType.gvk.kind}/${name}`);
-            void fetchItems(false);
           } catch (e) {
             reportError(e, tab.context);
           }
@@ -198,7 +220,6 @@ export function ResourceView({ tab }: { tab: ClusterTab }) {
           try {
             const jobName = await api.triggerCronjob(tab.context, ns ?? "default", name);
             pushToast("success", `Triggered job ${jobName}`);
-            void fetchItems(false);
           } catch (e) {
             reportError(e, tab.context);
           }
@@ -208,7 +229,6 @@ export function ResourceView({ tab }: { tab: ClusterTab }) {
           try {
             await api.cordonNode(tab.context, name, action === "cordon");
             pushToast("success", `${action === "cordon" ? "Cordoned" : "Uncordoned"} ${name}`);
-            void fetchItems(false);
           } catch (e) {
             reportError(e, tab.context);
           }
@@ -221,7 +241,7 @@ export function ResourceView({ tab }: { tab: ClusterTab }) {
           break;
       }
     },
-    [openLogs, openExec, resourceType.gvk, tab.context, pushToast, reportError, fetchItems],
+    [openLogs, openExec, resourceType.gvk, tab.context, pushToast, reportError],
   );
 
   const podContainerNames = (o: KubeObject | null): string[] =>
@@ -236,7 +256,6 @@ export function ResourceView({ tab }: { tab: ClusterTab }) {
       await api.deleteResource(tab.context, resourceType.gvk, objNamespace(deleteTarget) ?? null, name);
       pushToast("success", `Deleted ${resourceType.gvk.kind}/${name}`);
       if (selected && objKey(selected) === objKey(deleteTarget)) setSelected(null);
-      void fetchItems(false);
     } catch (e) {
       reportError(e, tab.context);
     }
@@ -277,16 +296,33 @@ export function ResourceView({ tab }: { tab: ClusterTab }) {
               className="h-7 pl-7 font-mono text-[12px]"
             />
           </div>
+          <Hint
+            label={
+              list.mode === "watch"
+                ? "Live: changes are pushed by the cluster"
+                : "Polling every 8s (watch not permitted)"
+            }
+          >
+            <Radio
+              className={
+                list.mode === "watch" ? "size-3.5 text-[hsl(var(--ok))]" : "size-3.5 text-muted-foreground"
+              }
+            />
+          </Hint>
           <Hint label="Refresh">
-            <Button size="iconSm" variant="ghost" onClick={() => void fetchItems(true)}>
+            <Button size="iconSm" variant="ghost" onClick={refresh}>
               <RefreshCw className={loading ? "animate-spin" : ""} />
             </Button>
           </Hint>
         </div>
 
+        {list.error != null && (
+          <ListError context={tab.context} tabId={tab.id} error={list.error} label={resourceType.label} />
+        )}
+
         {/* Table */}
         <div className="min-h-0 flex-1">
-          {loading && firstLoad.current ? (
+          {loading ? (
             <CenteredSpinner label={`Loading ${resourceType.label}…`} />
           ) : (
             <ResourceTable
@@ -294,6 +330,7 @@ export function ResourceView({ tab }: { tab: ClusterTab }) {
               items={visible}
               selectedKey={selected ? objKey(selected) : null}
               readOnly={isSafe}
+              allowed={allowed}
               onRowClick={(o) => setSelected(o)}
               onAction={handleAction}
             />
@@ -307,6 +344,7 @@ export function ResourceView({ tab }: { tab: ClusterTab }) {
           resourceType={resourceType}
           obj={selected}
           readOnly={isSafe}
+          allowed={allowed}
           onClose={() => setSelected(null)}
           onOpenLogs={openLogs}
           onScale={(o) => setScaleTarget(o)}
@@ -336,10 +374,7 @@ export function ResourceView({ tab }: { tab: ClusterTab }) {
           namespace={objNamespace(scaleTarget) ?? null}
           name={scaleTarget.metadata?.name ?? ""}
           current={currentReplicas}
-          onDone={() => {
-            setScaleTarget(null);
-            void fetchItems(false);
-          }}
+          onDone={() => setScaleTarget(null)}
         />
       )}
 
@@ -349,10 +384,7 @@ export function ResourceView({ tab }: { tab: ClusterTab }) {
           onOpenChange={(v) => !v && setDrainTarget(null)}
           context={tab.context}
           node={drainTarget}
-          onDone={() => {
-            setDrainTarget(null);
-            void fetchItems(false);
-          }}
+          onDone={() => setDrainTarget(null)}
         />
       )}
 

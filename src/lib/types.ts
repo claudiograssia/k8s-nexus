@@ -3,6 +3,7 @@
 export type ErrorKind =
   | "gkeAuth"
   | "auth"
+  | "forbidden"
   | "notFound"
   | "config"
   | "safeMode"
@@ -179,4 +180,42 @@ export interface KubeObject {
   __cpuMilli?: number;
   __memBytes?: number;
   [k: string]: unknown;
+}
+
+/** `kubectl auth can-i` question; must match Rust AccessCheck. */
+export interface AccessCheck {
+  group: string;
+  resource: string;
+  subresource?: string | null;
+  verb: string;
+  /** null / "" = cluster-wide. */
+  namespace?: string | null;
+}
+
+/** Live list request; must match Rust WatchRequest. */
+export interface WatchRequest {
+  context: string;
+  spec: GvkSpec;
+  /** One watcher per namespace; empty = cluster-wide. */
+  namespaces: string[];
+  labelSelector?: string | null;
+}
+
+/** One change from a watch; `scope` is the namespace ("" = cluster-wide). */
+export type WatchDelta =
+  | { type: "reset"; scope: string; items: KubeObject[] }
+  | { type: "apply"; scope: string; object: KubeObject }
+  | { type: "delete"; scope: string; object: KubeObject }
+  | {
+      type: "error";
+      scope: string;
+      kind: ErrorKind;
+      message: string;
+      phase: "list" | "watch";
+      fatal: boolean;
+    };
+
+export interface WatchBatch {
+  watchId: string;
+  deltas: WatchDelta[];
 }

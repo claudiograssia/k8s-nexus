@@ -5,6 +5,7 @@ import { cn, objNamespace } from "@/lib/utils";
 import type { ResourceType } from "@/lib/catalog";
 import { supportsLogs } from "@/lib/catalog";
 import type { KubeObject } from "@/lib/types";
+import type { RowAction } from "./ResourceTable";
 import { YamlEditor } from "@/components/yaml/YamlEditor";
 import { ConfigMapDetail } from "./detail/ConfigMapDetail";
 import { SecretDetail } from "./detail/SecretDetail";
@@ -18,6 +19,8 @@ interface Props {
   resourceType: ResourceType;
   obj: KubeObject;
   readOnly: boolean;
+  /** RBAC verdict per action; denied actions are hidden. */
+  allowed: (action: RowAction, obj: KubeObject) => boolean;
   onClose: () => void;
   onOpenLogs: (obj: KubeObject) => void;
   onScale: (obj: KubeObject) => void;
@@ -46,6 +49,7 @@ export function ResourceDetail({
   resourceType,
   obj,
   readOnly,
+  allowed,
   onClose,
   onOpenLogs,
   onScale,
@@ -56,7 +60,8 @@ export function ResourceDetail({
   const [tab, setTab] = useState<"overview" | "yaml" | "revisions">("overview");
   const name = obj.metadata?.name ?? "";
   const namespace = objNamespace(obj) ?? null;
-  const canLogs = supportsLogs(resourceType);
+  const can = (a: RowAction) => allowed(a, obj);
+  const canLogs = supportsLogs(resourceType) && can("logs");
   const isPod = resourceType.detail === "pod";
   const hasRevisions = resourceType.id === "deployments";
   const tabs: Array<"overview" | "yaml" | "revisions"> = hasRevisions
@@ -73,12 +78,12 @@ export function ResourceDetail({
             {namespace ? ` · ${namespace}` : ""}
           </p>
         </div>
-        {isPod && (
+        {isPod && can("exec") && (
           <Button size="xs" variant="outline" onClick={() => onExec(obj)}>
             <SquareTerminal /> Shell
           </Button>
         )}
-        {isPod && (
+        {isPod && can("files") && (
           <Button size="xs" variant="outline" onClick={() => onFiles(obj)}>
             <FolderTree /> Files
           </Button>
@@ -88,12 +93,12 @@ export function ResourceDetail({
             <ScrollText /> Logs
           </Button>
         )}
-        {resourceType.restartable && (
+        {resourceType.restartable && can("restart") && (
           <Button size="xs" variant="outline" onClick={() => onRestart(obj)} disabled={readOnly}>
             <RotateCw /> Restart
           </Button>
         )}
-        {resourceType.scalable && (
+        {resourceType.scalable && can("scale") && (
           <Button size="xs" variant="outline" onClick={() => onScale(obj)} disabled={readOnly}>
             <Scaling /> Scale
           </Button>
@@ -133,7 +138,7 @@ export function ResourceDetail({
             spec={resourceType.gvk}
             namespace={namespace}
             name={name}
-            readOnly={readOnly}
+            readOnly={readOnly || !can("edit")}
           />
         )}
       </div>

@@ -2,7 +2,7 @@ import * as React from "react";
 import { api } from "@/lib/api";
 import type { KubeObject, PodUsage } from "@/lib/types";
 import { formatBytes, formatCpu } from "@/lib/utils";
-import { namespaceScope } from "@/lib/scope";
+import { fetchScoped, listScoped } from "@/lib/listing";
 import { useAppStore, type ClusterTab } from "@/store/useAppStore";
 import { Badge } from "@/components/ui/badge";
 import { CenteredSpinner } from "@/components/ui/spinner";
@@ -282,23 +282,23 @@ export function FinOpsView({ tab }: { tab: ClusterTab }) {
 
   React.useEffect(() => {
     let cancelled = false;
-    const scope = namespaceScope(tab);
 
     const load = async () => {
       let pods: KubeObject[] = [];
       let usage: PodUsage[] = [];
       try {
-        const all = await api.listResources(
-          tab.context,
-          POD_GVK,
-          scope.queryNamespace,
-        );
-        pods = all.filter((p) => scope.matches(p.metadata?.namespace));
+        pods = await listScoped(tab.context, tab, POD_GVK);
       } catch (e) {
         useAppStore.getState().reportError(e, tab.context);
       }
       try {
-        usage = await api.podUsage(tab.context, scope.queryNamespace);
+        usage = await fetchScoped(
+          tab.context,
+          tab,
+          { id: "metrics.k8s.io/pods", namespaced: true },
+          "pod metrics",
+          (ns) => api.podUsage(tab.context, ns),
+        );
       } catch (e) {
         useAppStore.getState().reportError(e, tab.context);
       }

@@ -3,6 +3,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AccessCheck,
   DrainPod,
   FileEntry,
   GvkSpec,
@@ -14,6 +15,7 @@ import type {
   PodUsage,
   PortForwardInfo,
   PortForwardRequest,
+  WatchRequest,
 } from "./types";
 
 export const api = {
@@ -38,6 +40,15 @@ export const api = {
       namespace: namespace ?? null,
       labelSelector: labelSelector ?? null,
     }),
+
+  /** One answer per check, in order; null = could not be determined. */
+  checkAccess: (context: string, checks: AccessCheck[]) =>
+    invoke<(boolean | null)[]>("check_access", { context, checks }),
+
+  // Live lists (changes arrive as `watch://batch` events) --------------------
+  startWatch: (watchId: string, request: WatchRequest) =>
+    invoke<void>("start_watch", { watchId, request }),
+  stopWatch: (watchId: string) => invoke<void>("stop_watch", { watchId }),
 
   getResourceYaml: (
     context: string,

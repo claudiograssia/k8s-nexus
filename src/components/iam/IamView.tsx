@@ -11,10 +11,9 @@ import { Badge } from "@/components/ui/badge";
 import { CenteredSpinner } from "@/components/ui/spinner";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { namespaceScope } from "@/lib/scope";
+import { listScoped } from "@/lib/listing";
 import { formatAge } from "@/lib/utils";
 import { type ClusterTab, useAppStore } from "@/store/useAppStore";
-import { api } from "@/lib/api";
 import type { GvkSpec, KubeObject } from "@/lib/types";
 
 // --- Section definitions ---------------------------------------------------
@@ -161,18 +160,8 @@ export function IamView({ tab }: { tab: ClusterTab }) {
 
   const load = React.useCallback(async () => {
     setLoading(true);
-    const scope = namespaceScope(tab);
-    const gvk = active.gvk;
     try {
-      const result = await api.listResources(
-        tab.context,
-        gvk,
-        gvk.namespaced ? scope.queryNamespace : null,
-      );
-      const filtered = gvk.namespaced
-        ? result.filter((o) => scope.matches(o.metadata?.namespace))
-        : result;
-      setItems(filtered);
+      setItems(await listScoped(tab.context, tab, active.gvk));
     } catch (e) {
       reportError(e, tab.context);
       setItems([]);

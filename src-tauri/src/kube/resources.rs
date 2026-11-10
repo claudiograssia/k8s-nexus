@@ -38,7 +38,7 @@ impl GvkSpec {
     }
 }
 
-fn api_for(
+pub(crate) fn api_for(
     pool_client: kube::Client,
     spec: &GvkSpec,
     namespace: Option<&str>,
