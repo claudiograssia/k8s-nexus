@@ -11,9 +11,11 @@ import { Badge } from "@/components/ui/badge";
 import { CenteredSpinner } from "@/components/ui/spinner";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { listScoped } from "@/lib/listing";
+import { useResourceList } from "@/components/common/useResourceList";
+import { ListError } from "@/components/common/ListError";
+import { LiveIndicator } from "@/components/common/LiveIndicator";
 import { formatAge } from "@/lib/utils";
-import { type ClusterTab, useAppStore } from "@/store/useAppStore";
+import { type ClusterTab } from "@/store/useAppStore";
 import type { GvkSpec, KubeObject } from "@/lib/types";
 
 // --- Section definitions ---------------------------------------------------
@@ -149,33 +151,12 @@ function subjectNames(o: KubeObject): string {
 // --- Component -------------------------------------------------------------
 
 export function IamView({ tab }: { tab: ClusterTab }) {
-  const reportError = useAppStore((s) => s.reportError);
   const [section, setSection] = React.useState<SectionId>("ServiceAccounts");
-  const [items, setItems] = React.useState<KubeObject[]>([]);
-  const [loading, setLoading] = React.useState(false);
-  const [firstLoad, setFirstLoad] = React.useState(true);
   const [query, setQuery] = React.useState("");
 
   const active = SECTIONS.find((s) => s.id === section) ?? SECTIONS[0];
-
-  const load = React.useCallback(async () => {
-    setLoading(true);
-    try {
-      setItems(await listScoped(tab.context, tab, active.gvk));
-    } catch (e) {
-      reportError(e, tab.context);
-      setItems([]);
-    } finally {
-      setLoading(false);
-      setFirstLoad(false);
-    }
-  }, [tab, active, reportError]);
-
-  React.useEffect(() => {
-    setFirstLoad(true);
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab.context, tab.namespaceMode, tab.namespaces.join(","), section]);
+  const list = useResourceList({ context: tab.context, spec: active.gvk, selection: tab });
+  const { items, loading } = list;
 
   const q = query.trim().toLowerCase();
   const visible = q
@@ -223,6 +204,7 @@ export function IamView({ tab }: { tab: ClusterTab }) {
         </div>
 
         <div className="ml-auto flex items-center gap-2">
+          <LiveIndicator mode={list.mode} />
           <Input
             placeholder="Filter by name or namespace…"
             value={query}
@@ -232,8 +214,7 @@ export function IamView({ tab }: { tab: ClusterTab }) {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => void load()}
-            disabled={loading}
+            onClick={list.refresh}
           >
             <RefreshCw className={loading ? "size-3.5 animate-spin" : "size-3.5"} />
             Refresh
@@ -241,9 +222,13 @@ export function IamView({ tab }: { tab: ClusterTab }) {
         </div>
       </div>
 
+      {list.error != null && (
+        <ListError context={tab.context} tabId={tab.id} error={list.error} label={active.label} />
+      )}
+
       {/* Body */}
       <div className="flex-1 overflow-auto p-4">
-        {firstLoad && loading ? (
+        {loading && items.length === 0 ? (
           <CenteredSpinner label={`Loading ${active.label}…`} />
         ) : (
           <div className="rounded-lg border border-border bg-card">

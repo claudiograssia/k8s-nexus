@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { RefreshCw, Radio, Search, Tag } from "lucide-react";
+import { RefreshCw, Search, Tag } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Hint } from "@/components/ui/tooltip";
@@ -12,6 +12,7 @@ import { objKey, objNamespace } from "@/lib/utils";
 import type { KubeObject, PodUsage } from "@/lib/types";
 import { useResourceList } from "@/components/common/useResourceList";
 import { ListError } from "@/components/common/ListError";
+import { LiveIndicator } from "@/components/common/LiveIndicator";
 import { useAppStore, type ClusterTab } from "@/store/useAppStore";
 import { ResourceTable, type RowAction } from "./ResourceTable";
 import { ResourceDetail } from "./ResourceDetail";
@@ -296,19 +297,7 @@ export function ResourceView({ tab }: { tab: ClusterTab }) {
               className="h-7 pl-7 font-mono text-[12px]"
             />
           </div>
-          <Hint
-            label={
-              list.mode === "watch"
-                ? "Live: changes are pushed by the cluster"
-                : "Polling every 8s (watch not permitted)"
-            }
-          >
-            <Radio
-              className={
-                list.mode === "watch" ? "size-3.5 text-[hsl(var(--ok))]" : "size-3.5 text-muted-foreground"
-              }
-            />
-          </Hint>
+          <LiveIndicator mode={list.mode} />
           <Hint label="Refresh">
             <Button size="iconSm" variant="ghost" onClick={refresh}>
               <RefreshCw className={loading ? "animate-spin" : ""} />
