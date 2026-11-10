@@ -113,11 +113,16 @@ pub async fn get_yaml(
 }
 
 /// Server-side apply an edited YAML document back to the cluster.
+///
+/// Without `force`, changing a field owned by another manager (Helm, Argo CD,
+/// kubectl, a controller) fails with a 409 listing the conflicts, so the user
+/// can decide whether to take ownership.
 pub async fn apply_yaml(
     pool: &ClientPool,
     context: &str,
     spec: &GvkSpec,
     yaml: &str,
+    force: bool,
 ) -> AppResult<Value> {
     let obj: DynamicObject = serde_yaml::from_str(yaml)
         .map_err(|e| AppError::internal(format!("Invalid YAML: {e}")))?;
@@ -132,7 +137,10 @@ pub async fn apply_yaml(
     let client = pool.get(context).await?;
     let api = api_for(client, spec, namespace.as_deref());
 
-    let pp = PatchParams::apply("kubenexus-gke").force();
+    let mut pp = PatchParams::apply("kubenexus-gke");
+    if force {
+        pp = pp.force();
+    }
     let applied = api.patch(&name, &pp, &Patch::Apply(&obj)).await?;
     Ok(serde_json::to_value(applied)?)
 }

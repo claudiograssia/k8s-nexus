@@ -5,6 +5,7 @@ export type ErrorKind =
   | "auth"
   | "forbidden"
   | "notFound"
+  | "conflict"
   | "config"
   | "safeMode"
   | "process"

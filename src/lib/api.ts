@@ -66,8 +66,9 @@ export const api = {
   ) =>
     invoke<KubeObject>("get_resource_json", { context, spec, namespace, name }),
 
-  applyResourceYaml: (context: string, spec: GvkSpec, yaml: string) =>
-    invoke<KubeObject>("apply_resource_yaml", { context, spec, yaml }),
+  /** Server-side apply. `force` takes over fields owned by other managers. */
+  applyResourceYaml: (context: string, spec: GvkSpec, yaml: string, force = false) =>
+    invoke<KubeObject>("apply_resource_yaml", { context, spec, yaml, force }),
 
   deleteResource: (
     context: string,

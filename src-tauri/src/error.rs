@@ -20,6 +20,9 @@ pub enum ErrorKind {
     Forbidden,
     /// Requested resource / context was not found.
     NotFound,
+    /// 409: a server-side apply would take over fields owned by another
+    /// manager, or the object changed in the meantime.
+    Conflict,
     /// The kubeconfig could not be read or parsed.
     Config,
     /// A blocked write while Safe Mode (read-only) is active.
@@ -88,6 +91,7 @@ impl From<kube::Error> for AppError {
                 401 => ErrorKind::Auth,
                 403 => ErrorKind::Forbidden,
                 404 => ErrorKind::NotFound,
+                409 => ErrorKind::Conflict,
                 _ => ErrorKind::Internal,
             };
             return AppError::new(kind, humanize(&status.message, Some(status.code)));

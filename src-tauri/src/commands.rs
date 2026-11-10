@@ -163,10 +163,12 @@ pub async fn apply_resource_yaml(
     context: String,
     spec: GvkSpec,
     yaml: String,
+    force: Option<bool>,
 ) -> AppResult<Value> {
     state.ensure_writable(&context)?;
     let st = state.inner().clone();
-    crate::kube::resources::apply_yaml(&st.clients, &context, &spec, &yaml).await
+    crate::kube::resources::apply_yaml(&st.clients, &context, &spec, &yaml, force.unwrap_or(false))
+        .await
 }
 
 #[tauri::command]
