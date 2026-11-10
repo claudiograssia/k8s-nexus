@@ -56,7 +56,7 @@ fn pod_metrics_gvk() -> GvkSpec {
 }
 
 pub async fn node_usage(pool: &ClientPool, context: &str) -> AppResult<Vec<NodeUsage>> {
-    let items = crate::kube::resources::list(pool, context, &node_metrics_gvk(), None, None).await?;
+    let items = crate::kube::resources::list(pool, context, &node_metrics_gvk(), None, None, None).await?;
     Ok(items
         .into_iter()
         .filter_map(|item| {
@@ -77,7 +77,7 @@ pub async fn pod_usage(
     namespace: Option<&str>,
 ) -> AppResult<Vec<PodUsage>> {
     let items =
-        crate::kube::resources::list(pool, context, &pod_metrics_gvk(), namespace, None).await?;
+        crate::kube::resources::list(pool, context, &pod_metrics_gvk(), namespace, None, None).await?;
     Ok(items
         .into_iter()
         .filter_map(|item| {

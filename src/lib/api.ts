@@ -33,12 +33,14 @@ export const api = {
     spec: GvkSpec,
     namespace?: string | null,
     labelSelector?: string | null,
+    fieldSelector?: string | null,
   ) =>
     invoke<KubeObject[]>("list_resources", {
       context,
       spec,
       namespace: namespace ?? null,
       labelSelector: labelSelector ?? null,
+      fieldSelector: fieldSelector ?? null,
     }),
 
   /** One answer per check, in order; null = could not be determined. */

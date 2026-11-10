@@ -65,15 +65,17 @@ pub async fn list(
     spec: &GvkSpec,
     namespace: Option<&str>,
     label_selector: Option<&str>,
+    field_selector: Option<&str>,
 ) -> AppResult<Vec<Value>> {
     let client = pool.get(context).await?;
     let api = api_for(client, spec, namespace);
 
     let mut lp = ListParams::default();
-    if let Some(sel) = label_selector {
-        if !sel.is_empty() {
-            lp = lp.labels(sel);
-        }
+    if let Some(sel) = label_selector.filter(|s| !s.is_empty()) {
+        lp = lp.labels(sel);
+    }
+    if let Some(sel) = field_selector.filter(|s| !s.is_empty()) {
+        lp = lp.fields(sel);
     }
 
     let list = api.list(&lp).await?;

@@ -52,12 +52,12 @@ function num(v: unknown, fallback = 0): number {
   return typeof v === "number" ? v : fallback;
 }
 
-function tsOf(s?: string): number {
+export function tsOf(s?: string): number {
   return s ? Date.parse(s) || 0 : 0;
 }
 
 /** Best "last seen" timestamp for a core/v1 or events.k8s.io Event. */
-function eventTime(o: KubeObject): string | undefined {
+export function eventTime(o: KubeObject): string | undefined {
   const series = o["series"] as { lastObservedTime?: string } | undefined;
   const candidates = [
     o["lastTimestamp"],

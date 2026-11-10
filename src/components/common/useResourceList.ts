@@ -31,6 +31,7 @@ interface Options {
   spec: GvkSpec;
   selection: NamespaceSelection;
   labelSelector?: string | null;
+  fieldSelector?: string | null;
   enabled?: boolean;
   /** Interval for the polling fallback. */
   pollMs?: number;
@@ -49,6 +50,7 @@ export function useResourceList({
   spec,
   selection,
   labelSelector = null,
+  fieldSelector = null,
   enabled = true,
   pollMs = 8000,
 }: Options): ResourceListState {
@@ -105,7 +107,7 @@ export function useResourceList({
       setMode("poll");
       const run = async () => {
         try {
-          const list = await listScoped(context, selection, spec, labelSelector);
+          const list = await listScoped(context, selection, spec, labelSelector, fieldSelector);
           if (disposed) return;
           setItems(list);
           setError(null);
@@ -196,6 +198,7 @@ export function useResourceList({
           spec,
           namespaces: scopeList.filter(Boolean),
           labelSelector,
+          fieldSelector,
         });
       } catch (e) {
         // The client could not even be built (e.g. expired GKE token):
@@ -223,7 +226,7 @@ export function useResourceList({
       window.clearInterval(pollTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [context, specKey, selKey, labelSelector, enabled, pollMs, nonce, manualKey, listedCount]);
+  }, [context, specKey, selKey, labelSelector, fieldSelector, enabled, pollMs, nonce, manualKey, listedCount]);
 
   const refresh = useMemo(
     () => () => {

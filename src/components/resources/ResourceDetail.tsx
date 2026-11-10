@@ -13,6 +13,7 @@ import { PodDetail } from "./detail/PodDetail";
 import { ServiceAccountDetail } from "./detail/ServiceAccountDetail";
 import { GenericDetail } from "./detail/GenericDetail";
 import { RevisionsPanel } from "./detail/RevisionsPanel";
+import { EventsPanel } from "./detail/EventsPanel";
 
 interface Props {
   context: string;
@@ -44,6 +45,8 @@ function Overview({ resourceType, obj }: { resourceType: ResourceType; obj: Kube
   }
 }
 
+type DetailTab = "overview" | "events" | "revisions" | "yaml";
+
 export function ResourceDetail({
   context,
   resourceType,
@@ -57,16 +60,20 @@ export function ResourceDetail({
   onExec,
   onFiles,
 }: Props) {
-  const [tab, setTab] = useState<"overview" | "yaml" | "revisions">("overview");
+  const [tab, setTab] = useState<DetailTab>("overview");
   const name = obj.metadata?.name ?? "";
   const namespace = objNamespace(obj) ?? null;
   const can = (a: RowAction) => allowed(a, obj);
   const canLogs = supportsLogs(resourceType) && can("logs");
   const isPod = resourceType.detail === "pod";
   const hasRevisions = resourceType.id === "deployments";
-  const tabs: Array<"overview" | "yaml" | "revisions"> = hasRevisions
-    ? ["overview", "revisions", "yaml"]
-    : ["overview", "yaml"];
+  const isEvent = resourceType.gvk.kind === "Event";
+  const tabs: DetailTab[] = [
+    "overview",
+    ...(isEvent ? [] : (["events"] as const)),
+    ...(hasRevisions ? (["revisions"] as const) : []),
+    "yaml",
+  ];
 
   return (
     <div className="flex h-full w-[560px] shrink-0 flex-col border-l border-border bg-card/60">
@@ -127,6 +134,10 @@ export function ResourceDetail({
         {tab === "overview" ? (
           <div className="h-full overflow-y-auto p-3">
             <Overview resourceType={resourceType} obj={obj} />
+          </div>
+        ) : tab === "events" ? (
+          <div className="h-full overflow-y-auto">
+            <EventsPanel context={context} obj={obj} />
           </div>
         ) : tab === "revisions" ? (
           <div className="h-full overflow-y-auto">

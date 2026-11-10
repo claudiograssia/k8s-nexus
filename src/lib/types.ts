@@ -200,6 +200,7 @@ export interface WatchRequest {
   /** One watcher per namespace; empty = cluster-wide. */
   namespaces: string[];
   labelSelector?: string | null;
+  fieldSelector?: string | null;
 }
 
 /** One change from a watch; `scope` is the namespace ("" = cluster-wide). */

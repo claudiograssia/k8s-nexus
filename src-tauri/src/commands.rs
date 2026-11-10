@@ -92,6 +92,7 @@ pub async fn list_resources(
     spec: GvkSpec,
     namespace: Option<String>,
     label_selector: Option<String>,
+    field_selector: Option<String>,
 ) -> AppResult<Vec<Value>> {
     let st = state.inner().clone();
     crate::kube::resources::list(
@@ -100,6 +101,7 @@ pub async fn list_resources(
         &spec,
         namespace.as_deref(),
         label_selector.as_deref(),
+        field_selector.as_deref(),
     )
     .await
 }

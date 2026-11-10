@@ -146,8 +146,9 @@ export function listScoped(
   sel: NamespaceSelection,
   spec: GvkSpec,
   labelSelector?: string | null,
+  fieldSelector?: string | null,
 ): Promise<KubeObject[]> {
   return fetchScoped(context, sel, kindOf(spec), spec.plural, (ns) =>
-    api.listResources(context, spec, ns, labelSelector),
+    api.listResources(context, spec, ns, labelSelector, fieldSelector),
   );
 }

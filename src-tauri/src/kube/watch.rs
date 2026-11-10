@@ -38,6 +38,8 @@ pub struct WatchRequest {
     pub namespaces: Vec<String>,
     #[serde(default)]
     pub label_selector: Option<String>,
+    #[serde(default)]
+    pub field_selector: Option<String>,
 }
 
 /// One change for the UI. `scope` is the namespace the watcher covers
@@ -105,6 +107,9 @@ pub async fn start(
     let mut config = watcher::Config::default();
     if let Some(sel) = request.label_selector.as_deref().filter(|s| !s.is_empty()) {
         config = config.labels(sel);
+    }
+    if let Some(sel) = request.field_selector.as_deref().filter(|s| !s.is_empty()) {
+        config = config.fields(sel);
     }
 
     let (tx, rx) = mpsc::unbounded_channel::<Delta>();
