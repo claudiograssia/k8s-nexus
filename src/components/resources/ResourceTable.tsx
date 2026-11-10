@@ -12,6 +12,7 @@ import {
   CircleCheck,
   Droplets,
   FolderTree,
+  Bug,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -34,6 +35,7 @@ export type RowAction =
   | "delete"
   | "exec"
   | "attach"
+  | "debug"
   | "files"
   | "trigger"
   | "cordon"
@@ -133,6 +135,11 @@ export function ResourceTable({
                           {can("attach") && (
                             <DropdownMenuItem onClick={() => onAction("attach", obj)}>
                               <Plug /> Attach (distroless)
+                            </DropdownMenuItem>
+                          )}
+                          {can("debug") && !readOnly && (
+                            <DropdownMenuItem onClick={() => onAction("debug", obj)}>
+                              <Bug /> Debug container
                             </DropdownMenuItem>
                           )}
                           {can("files") && (

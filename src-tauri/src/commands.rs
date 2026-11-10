@@ -362,10 +362,15 @@ pub async fn pty_open_exec(
     container: Option<String>,
     mode: String,
     shell: Option<String>,
+    image: Option<String>,
     kubeconfig: Option<String>,
     rows: u16,
     cols: u16,
 ) -> AppResult<()> {
+    // A debug container modifies the pod (ephemeralcontainers subresource).
+    if mode == "debug" {
+        state.ensure_writable(&context)?;
+    }
     state.pty.open_exec(
         app,
         id,
@@ -375,6 +380,7 @@ pub async fn pty_open_exec(
         container.as_deref(),
         &mode,
         shell.as_deref(),
+        image.as_deref(),
         kubeconfig.as_deref(),
         rows,
         cols,

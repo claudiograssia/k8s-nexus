@@ -99,6 +99,7 @@ export function TerminalPanel() {
             exec.shell ?? null,
             term.rows,
             term.cols,
+            exec.image ?? null,
           );
         } else {
           await api.ptyOpen(id, context, null, term.rows, term.cols);
@@ -147,7 +148,7 @@ export function TerminalPanel() {
       </div>
       <div className="flex items-center gap-2 border-b border-border bg-card px-3 py-1.5">
         <TerminalSquare className="size-4 text-primary" />
-        <span className="text-[13px] font-semibold">{exec ? (exec.mode === "attach" ? "Attach" : "Shell") : "Terminal"}</span>
+        <span className="text-[13px] font-semibold">{exec ? (exec.mode === "attach" ? "Attach" : exec.mode === "debug" ? "Debug container" : "Shell") : "Terminal"}</span>
         <span className="truncate text-[11px] text-muted-foreground">{title}</span>
         {context && !exec && (
           <Hint label="Open in a native OS terminal window instead">

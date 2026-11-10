@@ -136,10 +136,11 @@ export const api = {
     namespace: string,
     pod: string,
     container: string | null,
-    mode: "exec" | "attach",
+    mode: "exec" | "attach" | "debug",
     shell: string | null,
     rows: number,
     cols: number,
+    image: string | null = null,
   ) =>
     invoke<void>("pty_open_exec", {
       id,
@@ -149,6 +150,7 @@ export const api = {
       container,
       mode,
       shell,
+      image,
       kubeconfig: null,
       rows,
       cols,

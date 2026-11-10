@@ -144,8 +144,10 @@ export interface ExecTarget {
   namespace: string;
   pod: string;
   container?: string;
-  mode: "exec" | "attach";
+  mode: "exec" | "attach" | "debug";
   shell?: string;
+  /** Image of the ephemeral container (debug mode). */
+  image?: string;
   title: string;
 }
 

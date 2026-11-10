@@ -73,11 +73,12 @@ impl PtySessions {
         container: Option<&str>,
         mode: &str,
         shell: Option<&str>,
+        image: Option<&str>,
         kubeconfig: Option<&str>,
         rows: u16,
         cols: u16,
     ) -> AppResult<()> {
-        let mut cmd = build_kubectl_command(context, namespace, pod, container, mode, shell);
+        let mut cmd = build_kubectl_command(context, namespace, pod, container, mode, shell, image);
         if let Some(kc) = kubeconfig.filter(|s| !s.trim().is_empty()) {
             cmd.env("KUBECONFIG", kc);
         }
@@ -202,6 +203,9 @@ impl PtySessions {
 
 /// Build `kubectl exec -it` (shell into a container) or `kubectl attach -it`
 /// (attach to the running process), pinned to the given context/namespace.
+/// Image for ephemeral debug containers: small, with a shell and basic tools.
+const DEFAULT_DEBUG_IMAGE: &str = "busybox:1.36";
+
 fn build_kubectl_command(
     context: &str,
     namespace: &str,
@@ -209,6 +213,7 @@ fn build_kubectl_command(
     container: Option<&str>,
     mode: &str,
     shell: Option<&str>,
+    image: Option<&str>,
 ) -> CommandBuilder {
     let kubectl = if cfg!(target_os = "windows") {
         "kubectl.exe"
@@ -216,6 +221,17 @@ fn build_kubectl_command(
         "kubectl"
     };
     let mut cmd = CommandBuilder::new(kubectl);
+    if mode == "debug" {
+        // Ephemeral debug container sharing the target container's process
+        // namespace: works on distroless images that have no shell.
+        cmd.args(["debug", "-i", "-t", "--context", context, "-n", namespace, pod]);
+        cmd.arg(format!("--image={}", image.unwrap_or(DEFAULT_DEBUG_IMAGE)));
+        if let Some(c) = container {
+            cmd.arg(format!("--target={c}"));
+        }
+        cmd.args(["--", shell.unwrap_or("sh")]);
+        return cmd;
+    }
     let sub = if mode == "attach" { "attach" } else { "exec" };
     cmd.arg(sub);
     cmd.arg("-i");

@@ -201,19 +201,21 @@ export function ResourceView({ tab }: { tab: ClusterTab }) {
           }
           break;
         case "exec":
-        case "attach": {
+        case "attach":
+        case "debug": {
           const containers =
             ((obj.spec as Record<string, unknown> | undefined)?.containers as
               | Array<{ name?: string }>
               | undefined)?.map((c) => c.name).filter((n): n is string => !!n) ?? [];
-          const container = containers.length > 1 ? containers[0] : undefined;
+          // A debug container always targets one to share its processes.
+          const container = action === "debug" || containers.length > 1 ? containers[0] : undefined;
           openExec({
             context: tab.context,
             namespace: ns ?? "default",
             pod: name,
             container,
             mode: action,
-            title: container ? `${name}:${container}` : name,
+            title: `${action === "debug" ? "debug " : ""}${container ? `${name}:${container}` : name}`,
           });
           break;
         }
@@ -339,6 +341,7 @@ export function ResourceView({ tab }: { tab: ClusterTab }) {
           onScale={(o) => setScaleTarget(o)}
           onRestart={(o) => void handleAction("restart", o)}
           onExec={(o) => void handleAction("exec", o)}
+          onDebug={(o) => void handleAction("debug", o)}
           onFiles={(o) => setFilesTarget(o)}
         />
       )}

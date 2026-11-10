@@ -45,6 +45,8 @@ export function checksFor(
       return [pods("create", "exec", namespace)];
     case "attach":
       return [pods("create", "attach", namespace)];
+    case "debug":
+      return [pods("patch", "ephemeralcontainers", namespace), pods("create", "attach", namespace)];
     case "trigger":
       return [{ group: "batch", resource: "jobs", verb: "create", namespace }];
     case "cordon":
@@ -58,7 +60,7 @@ export function checksFor(
 /** Every action a resource type can offer (what ResourceTable may show). */
 export function actionsFor(rt: ResourceType): RowAction[] {
   const out: RowAction[] = ["edit", "delete"];
-  if (rt.detail === "pod") out.push("logs", "exec", "attach", "files");
+  if (rt.detail === "pod") out.push("logs", "exec", "attach", "debug", "files");
   else if (["deployments", "statefulsets", "daemonsets", "replicasets", "jobs"].includes(rt.id))
     out.push("logs");
   if (rt.scalable) out.push("scale");

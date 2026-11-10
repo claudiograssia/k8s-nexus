@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { X, ScrollText, Scaling, RotateCw, SquareTerminal, FolderTree } from "lucide-react";
+import { X, ScrollText, Scaling, RotateCw, SquareTerminal, FolderTree, Bug } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn, objNamespace } from "@/lib/utils";
 import type { ResourceType } from "@/lib/catalog";
@@ -27,6 +27,7 @@ interface Props {
   onScale: (obj: KubeObject) => void;
   onRestart: (obj: KubeObject) => void;
   onExec: (obj: KubeObject) => void;
+  onDebug: (obj: KubeObject) => void;
   onFiles: (obj: KubeObject) => void;
 }
 
@@ -58,6 +59,7 @@ export function ResourceDetail({
   onScale,
   onRestart,
   onExec,
+  onDebug,
   onFiles,
 }: Props) {
   const [tab, setTab] = useState<DetailTab>("overview");
@@ -88,6 +90,11 @@ export function ResourceDetail({
         {isPod && can("exec") && (
           <Button size="xs" variant="outline" onClick={() => onExec(obj)}>
             <SquareTerminal /> Shell
+          </Button>
+        )}
+        {isPod && can("debug") && !readOnly && (
+          <Button size="xs" variant="outline" onClick={() => onDebug(obj)} title="Ephemeral debug container (busybox)">
+            <Bug /> Debug
           </Button>
         )}
         {isPod && can("files") && (
