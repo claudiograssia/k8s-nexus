@@ -14,13 +14,13 @@ fn common_dirs(home: Option<PathBuf>) -> Vec<String> {
         "/usr/local/bin".to_string(),
         "/usr/local/share/google-cloud-sdk/bin".to_string(),
     ];
+    // Unix paths only (this runs on macOS): join with '/' so the result does
+    // not depend on the platform's separator.
     if let Some(home) = home {
-        dirs.push(
-            home.join("google-cloud-sdk/bin")
-                .to_string_lossy()
-                .into_owned(),
-        );
-        dirs.push(home.join(".local/bin").to_string_lossy().into_owned());
+        let home = home.to_string_lossy();
+        let home = home.trim_end_matches('/');
+        dirs.push(format!("{home}/google-cloud-sdk/bin"));
+        dirs.push(format!("{home}/.local/bin"));
     }
     dirs
 }
