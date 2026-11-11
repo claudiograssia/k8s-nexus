@@ -39,9 +39,8 @@ pub struct KubeconfigSummary {
 pub fn load_summary() -> AppResult<KubeconfigSummary> {
     let sources = kubeconfig_sources();
 
-    let cfg = Kubeconfig::read().map_err(|e| {
-        AppError::config(format!("Unable to read kubeconfig: {e}"))
-    })?;
+    let cfg = Kubeconfig::read()
+        .map_err(|e| AppError::config(format!("Unable to read kubeconfig: {e}")))?;
 
     let current = cfg.current_context.clone();
 
@@ -119,7 +118,11 @@ fn kubeconfig_sources() -> Vec<String> {
         }
     }
     if let Some(home) = dirs::home_dir() {
-        return vec![home.join(".kube").join("config").to_string_lossy().into_owned()];
+        return vec![home
+            .join(".kube")
+            .join("config")
+            .to_string_lossy()
+            .into_owned()];
     }
     Vec::new()
 }
@@ -138,4 +141,23 @@ fn parse_gke_name(name: &str) -> (Option<String>, Option<String>, Option<String>
         }
     }
     (None, None, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_gke_name;
+
+    #[test]
+    fn parses_gke_context_names() {
+        assert_eq!(
+            parse_gke_name("gke_my-project_europe-west1_prod-cluster"),
+            (
+                Some("my-project".into()),
+                Some("europe-west1".into()),
+                Some("prod-cluster".into())
+            )
+        );
+        assert_eq!(parse_gke_name("minikube"), (None, None, None));
+        assert_eq!(parse_gke_name("gke_only_two"), (None, None, None));
+    }
 }

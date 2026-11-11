@@ -39,14 +39,21 @@ pub struct ToolStatus {
 
 fn tool_present(program: &str, args: &[&str]) -> bool {
     // `.output()` is Ok only if the binary was found and executed.
-    std::process::Command::new(program).args(args).output().is_ok()
+    std::process::Command::new(program)
+        .args(args)
+        .output()
+        .is_ok()
 }
 
 #[tauri::command]
 pub async fn check_tools() -> AppResult<ToolStatus> {
     tokio::task::spawn_blocking(|| {
         // On Windows `gcloud` is a `.cmd`; CreateProcess only auto-appends `.exe`.
-        let gcloud_bin = if cfg!(target_os = "windows") { "gcloud.cmd" } else { "gcloud" };
+        let gcloud_bin = if cfg!(target_os = "windows") {
+            "gcloud.cmd"
+        } else {
+            "gcloud"
+        };
         ToolStatus {
             kubectl: tool_present("kubectl", &["version", "--client"]),
             gcloud: tool_present(gcloud_bin, &["version"]),
@@ -442,7 +449,14 @@ pub async fn pod_write_file(
 ) -> AppResult<()> {
     state.ensure_writable(&context)?;
     tokio::task::spawn_blocking(move || {
-        crate::pod_fs::write_file(&context, &namespace, &pod, container.as_deref(), &path, &content)
+        crate::pod_fs::write_file(
+            &context,
+            &namespace,
+            &pod,
+            container.as_deref(),
+            &path,
+            &content,
+        )
     })
     .await
     .map_err(|e| AppError::internal(e.to_string()))?

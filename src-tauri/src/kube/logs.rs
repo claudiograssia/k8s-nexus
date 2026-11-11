@@ -7,6 +7,7 @@
 
 use crate::error::{AppError, AppResult};
 use crate::kube::client::ClientPool;
+use futures::{AsyncBufReadExt, TryStreamExt};
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::{Api, ListParams, LogParams};
 use parking_lot::Mutex;
@@ -15,7 +16,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use futures::{AsyncBufReadExt, TryStreamExt};
 use tauri::{AppHandle, Emitter};
 use tokio::task::JoinHandle;
 
@@ -274,4 +274,53 @@ pub async fn start_stream(
     sessions.register(&session_id, handles);
     let labels: Vec<String> = sources.into_iter().map(|(_, _, label)| label).collect();
     Ok(labels)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FilterSpec;
+
+    fn spec(query: &str, regex: bool, case_sensitive: bool, whole_word: bool) -> FilterSpec {
+        FilterSpec {
+            query: query.into(),
+            regex,
+            case_sensitive,
+            whole_word,
+        }
+    }
+
+    #[test]
+    fn empty_query_matches_everything() {
+        assert!(spec("  ", false, false, false).compile().unwrap().is_none());
+    }
+
+    #[test]
+    fn plain_text_is_escaped_and_case_insensitive_by_default() {
+        let re = spec("GET /api(v1)", false, false, false)
+            .compile()
+            .unwrap()
+            .unwrap();
+        assert!(re.is_match("get /API(v1) 200"));
+        assert!(!re.is_match("GET /apiv1"));
+    }
+
+    #[test]
+    fn case_sensitive_and_whole_word() {
+        let re = spec("Error", false, true, true).compile().unwrap().unwrap();
+        assert!(re.is_match("an Error occurred"));
+        assert!(!re.is_match("an error occurred"));
+        assert!(!re.is_match("ErrorHandler started"));
+    }
+
+    #[test]
+    fn regex_mode_and_invalid_regex() {
+        let re = spec(r"\b5\d\d\b", true, false, false)
+            .compile()
+            .unwrap()
+            .unwrap();
+        assert!(re.is_match("status=503"));
+        assert!(!re.is_match("status=200"));
+        let err = spec("(unclosed", true, false, false).compile().unwrap_err();
+        assert!(err.message.starts_with("Invalid regex"), "{}", err.message);
+    }
 }

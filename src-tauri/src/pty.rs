@@ -142,7 +142,12 @@ impl PtySessions {
                     Err(_) => break,
                 }
             }
-            let _ = app_reader.emit("pty://exit", PtyExit { id: read_id.clone() });
+            let _ = app_reader.emit(
+                "pty://exit",
+                PtyExit {
+                    id: read_id.clone(),
+                },
+            );
         });
 
         self.inner.lock().insert(
@@ -224,7 +229,16 @@ fn build_kubectl_command(
     if mode == "debug" {
         // Ephemeral debug container sharing the target container's process
         // namespace: works on distroless images that have no shell.
-        cmd.args(["debug", "-i", "-t", "--context", context, "-n", namespace, pod]);
+        cmd.args([
+            "debug",
+            "-i",
+            "-t",
+            "--context",
+            context,
+            "-n",
+            namespace,
+            pod,
+        ]);
         cmd.arg(format!("--image={}", image.unwrap_or(DEFAULT_DEBUG_IMAGE)));
         if let Some(c) = container {
             cmd.arg(format!("--target={c}"));
@@ -272,5 +286,87 @@ fn build_shell_command(context: &str) -> CommandBuilder {
             &format!("kubectl config use-context '{ctx_sh}'; exec \"$SHELL\""),
         ]);
         cmd
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_kubectl_command;
+
+    fn argv(
+        mode: &str,
+        container: Option<&str>,
+        shell: Option<&str>,
+        image: Option<&str>,
+    ) -> Vec<String> {
+        build_kubectl_command("ctx", "ns", "pod-1", container, mode, shell, image)
+            .get_argv()
+            .iter()
+            .skip(1) // the kubectl binary
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn exec_defaults_to_sh() {
+        assert_eq!(
+            argv("exec", Some("app"), None, None),
+            [
+                "exec",
+                "-i",
+                "-t",
+                "--context",
+                "ctx",
+                "-n",
+                "ns",
+                "pod-1",
+                "-c",
+                "app",
+                "--",
+                "/bin/sh"
+            ]
+        );
+    }
+
+    #[test]
+    fn attach_has_no_command() {
+        assert_eq!(
+            argv("attach", None, Some("bash"), None),
+            [
+                "attach",
+                "-i",
+                "-t",
+                "--context",
+                "ctx",
+                "-n",
+                "ns",
+                "pod-1"
+            ]
+        );
+    }
+
+    #[test]
+    fn debug_targets_the_container() {
+        assert_eq!(
+            argv("debug", Some("app"), None, None),
+            [
+                "debug",
+                "-i",
+                "-t",
+                "--context",
+                "ctx",
+                "-n",
+                "ns",
+                "pod-1",
+                "--image=busybox:1.36",
+                "--target=app",
+                "--",
+                "sh"
+            ]
+        );
+        let custom = argv("debug", None, Some("bash"), Some("nicolaka/netshoot"));
+        assert!(custom.contains(&"--image=nicolaka/netshoot".to_string()));
+        assert!(!custom.iter().any(|a| a.starts_with("--target")));
+        assert_eq!(custom.last().map(String::as_str), Some("bash"));
     }
 }

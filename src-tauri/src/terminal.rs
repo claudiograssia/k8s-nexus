@@ -16,7 +16,12 @@ fn resolve_kubeconfig(explicit: Option<String>) -> String {
         }
     }
     dirs::home_dir()
-        .map(|h| h.join(".kube").join("config").to_string_lossy().into_owned())
+        .map(|h| {
+            h.join(".kube")
+                .join("config")
+                .to_string_lossy()
+                .into_owned()
+        })
         .unwrap_or_default()
 }
 
@@ -62,7 +67,15 @@ fn open_windows(context: &str, kubeconfig: &str) -> AppResult<()> {
 
     Command::new("cmd")
         .env("KUBECONFIG", kubeconfig)
-        .args(["/C", "start", "", "powershell.exe", "-NoExit", "-Command", &ps_cmd])
+        .args([
+            "/C",
+            "start",
+            "",
+            "powershell.exe",
+            "-NoExit",
+            "-Command",
+            &ps_cmd,
+        ])
         .spawn()
         .map_err(|e| AppError::process(format!("Failed to launch PowerShell: {e}")))?;
     Ok(())
@@ -82,10 +95,17 @@ fn open_macos(context: &str, kubeconfig: &str) -> AppResult<()> {
 end tell"#,
         inner.replace('"', "\\\"")
     );
-    if Command::new("osascript").args(["-e", &iterm]).spawn().is_ok() {
+    if Command::new("osascript")
+        .args(["-e", &iterm])
+        .spawn()
+        .is_ok()
+    {
         return Ok(());
     }
-    let terminal = format!(r#"tell application "Terminal" to do script "{}""#, inner.replace('"', "\\\""));
+    let terminal = format!(
+        r#"tell application "Terminal" to do script "{}""#,
+        inner.replace('"', "\\\"")
+    );
     Command::new("osascript")
         .args(["-e", &terminal])
         .spawn()
@@ -102,10 +122,22 @@ fn open_linux(context: &str, kubeconfig: &str) -> AppResult<()> {
 
     // Try the common terminal emulators in order of ubiquity.
     let candidates: &[(&str, Vec<String>)] = &[
-        ("gnome-terminal", vec!["--".into(), "bash".into(), "-c".into(), inner.clone()]),
-        ("konsole", vec!["-e".into(), "bash".into(), "-c".into(), inner.clone()]),
-        ("alacritty", vec!["-e".into(), "bash".into(), "-c".into(), inner.clone()]),
-        ("xterm", vec!["-e".into(), "bash".into(), "-c".into(), inner.clone()]),
+        (
+            "gnome-terminal",
+            vec!["--".into(), "bash".into(), "-c".into(), inner.clone()],
+        ),
+        (
+            "konsole",
+            vec!["-e".into(), "bash".into(), "-c".into(), inner.clone()],
+        ),
+        (
+            "alacritty",
+            vec!["-e".into(), "bash".into(), "-c".into(), inner.clone()],
+        ),
+        (
+            "xterm",
+            vec!["-e".into(), "bash".into(), "-c".into(), inner.clone()],
+        ),
     ];
 
     for (bin, args) in candidates {

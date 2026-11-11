@@ -11,12 +11,7 @@ use serde_json::json;
 use std::collections::BTreeMap;
 
 /// Cordon (`on = true`) or uncordon a node by toggling `spec.unschedulable`.
-pub async fn set_cordon(
-    pool: &ClientPool,
-    context: &str,
-    node: &str,
-    on: bool,
-) -> AppResult<()> {
+pub async fn set_cordon(pool: &ClientPool, context: &str, node: &str, on: bool) -> AppResult<()> {
     let client = pool.get(context).await?;
     let nodes: Api<Node> = Api::all(client);
     let patch = json!({ "spec": { "unschedulable": on } });

@@ -236,7 +236,11 @@ fn html_summary(html: &str) -> String {
         .replace("That’s an error.", "")
         .trim()
         .to_string();
-    if let Some(rest) = regex::Regex::new(r"^\d{3}\.\s*").unwrap().find(&text).map(|m| text[m.end()..].to_string()) {
+    if let Some(rest) = regex::Regex::new(r"^\d{3}\.\s*")
+        .unwrap()
+        .find(&text)
+        .map(|m| text[m.end()..].to_string())
+    {
         text = rest;
     }
     if text.chars().count() > 300 {
@@ -248,6 +252,8 @@ fn html_summary(html: &str) -> String {
         text
     }
 }
+
+pub type AppResult<T> = Result<T, AppError>;
 
 #[cfg(test)]
 mod tests {
@@ -264,9 +270,48 @@ mod tests {
     }
 
     #[test]
+    fn maps_api_status_codes() {
+        let api = |code: u16| {
+            AppError::from(kube::Error::Api(kube::core::ErrorResponse {
+                status: "Failure".into(),
+                message: format!("status {code}"),
+                reason: String::new(),
+                code,
+            }))
+            .kind
+        };
+        assert_eq!(api(401), ErrorKind::Auth);
+        assert_eq!(api(403), ErrorKind::Forbidden);
+        assert_eq!(api(404), ErrorKind::NotFound);
+        assert_eq!(api(409), ErrorKind::Conflict);
+        assert_eq!(api(500), ErrorKind::Internal);
+    }
+
+    #[test]
+    fn classifies_opaque_messages() {
+        let kind = |m: &str| classify(m).kind;
+        assert_eq!(
+            kind("exec plugin: gke-gcloud-auth-plugin failed: Reauthentication failed"),
+            ErrorKind::GkeAuth
+        );
+        assert_eq!(
+            kind("pods is forbidden: User cannot list"),
+            ErrorKind::Forbidden
+        );
+        assert_eq!(kind("401 Unauthorized"), ErrorKind::Auth);
+        assert_eq!(kind("context \"x\" not found"), ErrorKind::NotFound);
+        assert_eq!(
+            kind("dial tcp 10.0.0.1:443: i/o timeout"),
+            ErrorKind::Connection
+        );
+        assert_eq!(kind("something odd"), ErrorKind::Internal);
+    }
+
+    #[test]
     fn leaves_plain_messages_alone() {
-        assert_eq!(humanize("pods is forbidden", Some(403)), "pods is forbidden");
+        assert_eq!(
+            humanize("pods is forbidden", Some(403)),
+            "pods is forbidden"
+        );
     }
 }
-
-pub type AppResult<T> = Result<T, AppError>;

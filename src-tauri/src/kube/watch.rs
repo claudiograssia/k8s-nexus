@@ -48,9 +48,18 @@ pub struct WatchRequest {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Delta {
     /// Full current list of the scope (initial list, and every relist).
-    Reset { scope: String, items: Vec<Value> },
-    Apply { scope: String, object: Value },
-    Delete { scope: String, object: Value },
+    Reset {
+        scope: String,
+        items: Vec<Value>,
+    },
+    Apply {
+        scope: String,
+        object: Value,
+    },
+    Delete {
+        scope: String,
+        object: Value,
+    },
     Error {
         scope: String,
         kind: ErrorKind,
@@ -117,7 +126,12 @@ pub async fn start(
     for scope in scopes {
         let ns = (!scope.is_empty()).then_some(scope.as_str());
         let api = api_for(client.clone(), &request.spec, ns);
-        handles.push(tokio::spawn(run_scope(api, config.clone(), scope, tx.clone())));
+        handles.push(tokio::spawn(run_scope(
+            api,
+            config.clone(),
+            scope,
+            tx.clone(),
+        )));
     }
     drop(tx);
     handles.push(tokio::spawn(emit_batches(app, watch_id.clone(), rx)));
