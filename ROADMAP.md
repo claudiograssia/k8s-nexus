@@ -19,10 +19,10 @@
    - Riepilogo unico: eventi, `lastState`, probe, OOMKilled, image pull.
    - Debug con container effimero.
 6. **Discovery automatica delle CRD/API** ✅ al posto della lista fissa in `catalog.ts`.
-7. **Test e CI**
+7. **Test e CI** ✅
    - Test Rust (parsing, classificazione errori, quantità) e frontend (Vitest).
    - GitHub Actions: typecheck, test, build per Linux / Windows / macOS.
-8. **README e pacchetti**: istruzioni per Linux (`.deb`, `.rpm`, `.AppImage`) e macOS.
+8. **README e pacchetti** ✅: istruzioni per Linux (`.deb`, `.rpm`, `.AppImage`) e macOS.
 
 ## Dopo
 
@@ -34,5 +34,5 @@
 ## Note macOS
 
 - I binari si compilano solo su un Mac o su un runner `macos` di GitHub Actions (universal: arm64 + x86_64).
-- Un'app avviata dal Finder non eredita il `PATH` della shell, quindi `kubectl`, `gcloud` e `gke-gcloud-auth-plugin` installati con Homebrew non si trovano. Serve ricostruire il PATH all'avvio.
+- Un'app avviata dal Finder non eredita il `PATH` della shell, quindi `kubectl`, `gcloud` e `gke-gcloud-auth-plugin` installati con Homebrew non si trovano. ✅ All'avvio il PATH si legge dalla shell di login (`shell_env.rs`), più le cartelle di Homebrew e del Cloud SDK.
 - Senza firma, Gatekeeper blocca il primo avvio: si apre con "clic destro → Apri" oppure con `xattr -cr`. Firma e notarizzazione richiedono l'Apple Developer Program (99 $/anno).
