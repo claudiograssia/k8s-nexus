@@ -6,6 +6,7 @@ mod gcp;
 mod kube;
 mod pod_fs;
 mod pty;
+mod shell_env;
 mod state;
 mod terminal;
 
@@ -13,6 +14,9 @@ use state::AppState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Before anything else (threads, child processes): see shell_env.rs.
+    shell_env::fix_path();
+
     // Install the rustls `ring` crypto provider as the process default *before*
     // kube constructs any TLS client. Otherwise kube 0.96 falls back to
     // aws-lc-rs, which fails the GKE TLS handshake on Windows.
