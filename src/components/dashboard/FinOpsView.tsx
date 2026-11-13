@@ -4,6 +4,7 @@ import type { KubeObject, PodUsage } from "@/lib/types";
 import { useResourceList } from "@/components/common/useResourceList";
 import { ListError } from "@/components/common/ListError";
 import { formatBytes, formatCpu } from "@/lib/utils";
+import { parseCpuMilli, parseMemBytes } from "@/lib/quantity";
 import { fetchScoped } from "@/lib/listing";
 import { useAppStore, type ClusterTab } from "@/store/useAppStore";
 import { Badge } from "@/components/ui/badge";
@@ -19,67 +20,6 @@ const POD_GVK = {
 } as const;
 
 const REFRESH_MS = 15_000;
-
-/** Parse a Kubernetes CPU quantity into millicores. */
-function parseCpuMilli(v: unknown): number {
-  if (typeof v === "number") return v * 1000;
-  if (typeof v !== "string" || v.length === 0) return 0;
-  const s = v.trim();
-  if (s.endsWith("m")) {
-    const n = parseFloat(s.slice(0, -1));
-    return Number.isFinite(n) ? n : 0;
-  }
-  if (s.endsWith("n")) {
-    // nanocores
-    const n = parseFloat(s.slice(0, -1));
-    return Number.isFinite(n) ? n / 1_000_000 : 0;
-  }
-  if (s.endsWith("u")) {
-    // microcores
-    const n = parseFloat(s.slice(0, -1));
-    return Number.isFinite(n) ? n / 1000 : 0;
-  }
-  const n = parseFloat(s);
-  return Number.isFinite(n) ? n * 1000 : 0;
-}
-
-/** Parse a Kubernetes memory quantity into bytes. */
-function parseMemBytes(v: unknown): number {
-  if (typeof v === "number") return v;
-  if (typeof v !== "string" || v.length === 0) return 0;
-  const s = v.trim();
-  const binary: Record<string, number> = {
-    Ki: 1024,
-    Mi: 1024 ** 2,
-    Gi: 1024 ** 3,
-    Ti: 1024 ** 4,
-    Pi: 1024 ** 5,
-    Ei: 1024 ** 6,
-  };
-  const decimal: Record<string, number> = {
-    k: 1000,
-    K: 1000,
-    M: 1000 ** 2,
-    G: 1000 ** 3,
-    T: 1000 ** 4,
-    P: 1000 ** 5,
-    E: 1000 ** 6,
-  };
-  for (const suffix of Object.keys(binary)) {
-    if (s.endsWith(suffix)) {
-      const n = parseFloat(s.slice(0, -suffix.length));
-      return Number.isFinite(n) ? n * binary[suffix] : 0;
-    }
-  }
-  for (const suffix of Object.keys(decimal)) {
-    if (s.endsWith(suffix)) {
-      const n = parseFloat(s.slice(0, -suffix.length));
-      return Number.isFinite(n) ? n * decimal[suffix] : 0;
-    }
-  }
-  const n = parseFloat(s);
-  return Number.isFinite(n) ? n : 0;
-}
 
 interface ResourceQuantities {
   cpu?: unknown;

@@ -31,6 +31,8 @@ export interface ClusterTab {
   /** Selected namespaces; empty means "all namespaces". */
   namespaces: string[];
   namespaceMode: NamespaceMode;
+  /** Object (`namespace/name`) to open in the detail panel once the list loads. */
+  focus?: string;
 }
 
 export interface Favorite {

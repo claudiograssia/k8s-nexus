@@ -25,6 +25,7 @@ export function ResourceView({ tab }: { tab: ClusterTab }) {
   const resourceType = resourceTypeById(tab.resourceId) ?? CATALOG_BY_ID.get("pods")!;
   const isSafe = useAppStore((s) => s.isSafe(tab.context));
   const pushToast = useAppStore((s) => s.pushToast);
+  const updateTab = useAppStore((s) => s.updateTab);
   const reportError = useAppStore((s) => s.reportError);
 
   const [search, setSearch] = useState("");
@@ -117,6 +118,30 @@ export function ResourceView({ tab }: { tab: ClusterTab }) {
     setSelected(null);
     setSearch("");
   }, [resourceType.id]);
+
+  // Open the object another view asked for (e.g. a pod from a node's pod list).
+  useEffect(() => {
+    if (!tab.focus) return;
+    const found = items.find((o) => objKey(o) === tab.focus);
+    if (!found) return;
+    setSelected(found);
+    updateTab(tab.id, { focus: undefined });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, tab.focus]);
+
+  const openPod = useCallback(
+    (pod: KubeObject) => {
+      const ns = objNamespace(pod) ?? "";
+      // Keep the namespace selection when it already shows the pod.
+      const shown = tab.namespaceMode === "all" || tab.namespaces.length === 0 || tab.namespaces.includes(ns);
+      updateTab(tab.id, {
+        resourceId: "pods",
+        focus: objKey(pod),
+        ...(shown ? {} : { namespaceMode: "single" as const, namespaces: [ns] }),
+      });
+    },
+    [tab.id, tab.namespaceMode, tab.namespaces, updateTab],
+  );
 
   // Keep the open detail panel in sync with live updates.
   useEffect(() => {
@@ -343,6 +368,7 @@ export function ResourceView({ tab }: { tab: ClusterTab }) {
           onExec={(o) => void handleAction("exec", o)}
           onDebug={(o) => void handleAction("debug", o)}
           onFiles={(o) => setFilesTarget(o)}
+          onOpenPod={openPod}
         />
       )}
 

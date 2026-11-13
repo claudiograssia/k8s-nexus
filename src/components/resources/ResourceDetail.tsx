@@ -10,6 +10,7 @@ import { YamlEditor } from "@/components/yaml/YamlEditor";
 import { ConfigMapDetail } from "./detail/ConfigMapDetail";
 import { SecretDetail } from "./detail/SecretDetail";
 import { PodDetail } from "./detail/PodDetail";
+import { NodeDetail } from "./detail/NodeDetail";
 import { ServiceAccountDetail } from "./detail/ServiceAccountDetail";
 import { GenericDetail } from "./detail/GenericDetail";
 import { RevisionsPanel } from "./detail/RevisionsPanel";
@@ -29,12 +30,26 @@ interface Props {
   onExec: (obj: KubeObject) => void;
   onDebug: (obj: KubeObject) => void;
   onFiles: (obj: KubeObject) => void;
+  /** Show a pod in the Pods view (from a node's pod list). */
+  onOpenPod?: (pod: KubeObject) => void;
 }
 
-function Overview({ context, resourceType, obj }: { context: string; resourceType: ResourceType; obj: KubeObject }) {
+function Overview({
+  context,
+  resourceType,
+  obj,
+  onOpenPod,
+}: {
+  context: string;
+  resourceType: ResourceType;
+  obj: KubeObject;
+  onOpenPod?: (pod: KubeObject) => void;
+}) {
   switch (resourceType.detail) {
     case "pod":
       return <PodDetail context={context} obj={obj} />;
+    case "node":
+      return <NodeDetail context={context} obj={obj} onOpenPod={onOpenPod} />;
     case "configmap":
       return <ConfigMapDetail obj={obj} />;
     case "secret":
@@ -61,6 +76,7 @@ export function ResourceDetail({
   onExec,
   onDebug,
   onFiles,
+  onOpenPod,
 }: Props) {
   const [tab, setTab] = useState<DetailTab>("overview");
   const name = obj.metadata?.name ?? "";
@@ -140,7 +156,7 @@ export function ResourceDetail({
       <div className="min-h-0 flex-1 overflow-hidden">
         {tab === "overview" ? (
           <div className="h-full overflow-y-auto p-3">
-            <Overview context={context} resourceType={resourceType} obj={obj} />
+            <Overview context={context} resourceType={resourceType} obj={obj} onOpenPod={onOpenPod} />
           </div>
         ) : tab === "events" ? (
           <div className="h-full overflow-y-auto">

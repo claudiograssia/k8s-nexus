@@ -30,6 +30,7 @@ import { ListError } from "@/components/common/ListError";
 import type { ClusterTab } from "@/store/useAppStore";
 import { isAppError, type KubeObject, type NodeUsage, type PodUsage } from "@/lib/types";
 import { formatBytes, formatCpu } from "@/lib/utils";
+import { parseCpuMilli, parseMemBytes } from "@/lib/quantity";
 
 // ---------------------------------------------------------------------------
 // Theme colors (match index.css HSL tokens).
@@ -63,54 +64,6 @@ function asRecord(v: unknown): Record<string, unknown> | undefined {
 
 function asArray(v: unknown): unknown[] {
   return Array.isArray(v) ? v : [];
-}
-
-/** Parse a Kubernetes CPU quantity into millicores. Accepts "500m", "2", "1.5", "250000000n", "250000u". */
-function parseCpuMilli(v: unknown): number {
-  if (typeof v !== "string" || v.trim() === "") return 0;
-  const s = v.trim();
-  if (s.endsWith("m")) {
-    const n = parseFloat(s.slice(0, -1));
-    return Number.isFinite(n) ? n : 0;
-  }
-  if (s.endsWith("n")) {
-    const n = parseFloat(s.slice(0, -1));
-    return Number.isFinite(n) ? n / 1e6 : 0;
-  }
-  if (s.endsWith("u")) {
-    const n = parseFloat(s.slice(0, -1));
-    return Number.isFinite(n) ? n / 1e3 : 0;
-  }
-  const cores = parseFloat(s);
-  return Number.isFinite(cores) ? cores * 1000 : 0;
-}
-
-/** Parse a Kubernetes memory quantity into bytes. Accepts binary (Ki/Mi/Gi…), decimal (K/M/G…) or plain bytes. */
-function parseMemBytes(v: unknown): number {
-  if (typeof v !== "string" || v.trim() === "") return 0;
-  const m = v.trim().match(/^([0-9.]+)\s*([A-Za-z]*)$/);
-  if (!m) return 0;
-  const value = parseFloat(m[1]);
-  if (!Number.isFinite(value)) return 0;
-  const unit = m[2];
-  const factors: Record<string, number> = {
-    "": 1,
-    Ki: 1024,
-    Mi: 1024 ** 2,
-    Gi: 1024 ** 3,
-    Ti: 1024 ** 4,
-    Pi: 1024 ** 5,
-    Ei: 1024 ** 6,
-    K: 1e3,
-    M: 1e6,
-    G: 1e9,
-    T: 1e12,
-    P: 1e15,
-    E: 1e18,
-    k: 1e3,
-  };
-  const factor = factors[unit] ?? 1;
-  return value * factor;
 }
 
 // ---------------------------------------------------------------------------

@@ -38,7 +38,7 @@ export interface ResourceType {
   scalable?: boolean;
   restartable?: boolean;
   /** Custom detail panel key handled by the resource detail view. */
-  detail?: "pod" | "configmap" | "secret" | "serviceaccount" | "ingress" | "backendconfig";
+  detail?: "pod" | "node" | "configmap" | "secret" | "serviceaccount" | "ingress" | "backendconfig";
 }
 
 const age: ColumnDef = {
@@ -155,6 +155,7 @@ export const CATALOG: ResourceType[] = [
     id: "nodes",
     label: "Nodes",
     category: "Cluster",
+    detail: "node",
     gvk: { group: "", version: "v1", kind: "Node", plural: "nodes", namespaced: false },
     columns: [
       { key: "name", header: "Name", accessor: (o) => o.metadata?.name ?? "—" },
