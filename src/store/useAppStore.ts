@@ -3,6 +3,8 @@ import { persist } from "zustand/middleware";
 import { api } from "@/lib/api";
 import {
   isAppError,
+  type AccessCheck,
+  type DiscoveryResult,
   type ContextInfo,
   type ExecTarget,
   type KubeconfigSummary,
@@ -29,6 +31,8 @@ export interface ClusterTab {
   /** Selected namespaces; empty means "all namespaces". */
   namespaces: string[];
   namespaceMode: NamespaceMode;
+  /** Object (`namespace/name`) to open in the detail panel once the list loads. */
+  focus?: string;
 }
 
 export interface Favorite {
@@ -54,6 +58,18 @@ export interface GkeAuthPrompt {
 let counter = 0;
 const uid = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${counter++}`;
 
+/** Polling views hit the same failure every few seconds: toast it once a minute at most. */
+const ERROR_REPEAT_MS = 60_000;
+const lastErrorAt = new Map<string, number>();
+const MAX_TOASTS = 4;
+
+/** Cache key of one permission check. */
+export function accessKey(context: string, c: AccessCheck): string {
+  return [context, c.verb, c.group, c.resource, c.subresource ?? "", c.namespace ?? ""].join("|");
+}
+const accessInFlight = new Set<string>();
+const discoveryInFlight = new Set<string>();
+
 interface AppState {
   // Startup
   init: () => Promise<void>;
@@ -72,7 +88,22 @@ interface AppState {
 
   // Namespace cache per context
   namespacesByContext: Record<string, string[]>;
+  /** Contexts where listing namespaces is forbidden: the user adds them by hand. */
+  namespacesForbidden: Record<string, boolean>;
   loadNamespaces: (context: string) => Promise<void>;
+  /** Namespaces typed in by the user, per context (persisted). */
+  manualNamespaces: Record<string, string[]>;
+  addManualNamespace: (context: string, namespace: string) => void;
+  removeManualNamespace: (context: string, namespace: string) => void;
+
+  // Permissions: SelfSubjectAccessReview answers keyed by `accessKey`.
+  // null = could not be determined (treated as allowed).
+  access: Record<string, boolean | null>;
+  ensureAccess: (context: string, checks: AccessCheck[]) => Promise<void>;
+
+  /** API discovery per context (not persisted). */
+  discovery: Record<string, DiscoveryResult | undefined>;
+  loadDiscovery: (context: string, force?: boolean) => Promise<void>;
 
   // Tabs
   tabs: ClusterTab[];
@@ -116,7 +147,8 @@ interface AppState {
   dismissToast: (id: string) => void;
   gkeAuthPrompt: GkeAuthPrompt | null;
   setGkeAuthPrompt: (p: GkeAuthPrompt | null) => void;
-  reportError: (e: unknown, context?: string) => void;
+  /** `silent` skips the toast (for views that show the error inline). */
+  reportError: (e: unknown, context?: string, opts?: { silent?: boolean }) => void;
 }
 
 export const useAppStore = create<AppState>()(
@@ -183,6 +215,7 @@ export const useAppStore = create<AppState>()(
       },
 
       namespacesByContext: {},
+      namespacesForbidden: {},
       async loadNamespaces(context) {
         try {
           const items = await api.listResources(context, {
@@ -198,14 +231,77 @@ export const useAppStore = create<AppState>()(
             .sort();
           set((s) => ({
             namespacesByContext: { ...s.namespacesByContext, [context]: names },
+            namespacesForbidden: { ...s.namespacesForbidden, [context]: false },
           }));
         } catch (e) {
+          if (isAppError(e) && e.kind === "forbidden") {
+            set((s) => ({ namespacesForbidden: { ...s.namespacesForbidden, [context]: true } }));
+            return;
+          }
           // Silent: this is a background load with its own retry. On an auth
           // failure (e.g. expired GKE token at cold start) drop the cached
           // client so the next attempt rebuilds with fresh credentials.
           if (isAppError(e) && (e.kind === "auth" || e.kind === "gkeAuth")) {
             void api.invalidateClient(context);
           }
+        }
+      },
+
+      manualNamespaces: {},
+      addManualNamespace(context, namespace) {
+        const ns = namespace.trim();
+        if (!ns) return;
+        set((s) => {
+          const current = s.manualNamespaces[context] ?? [];
+          if (current.includes(ns)) return {};
+          return { manualNamespaces: { ...s.manualNamespaces, [context]: [...current, ns].sort() } };
+        });
+      },
+      removeManualNamespace(context, namespace) {
+        set((s) => ({
+          manualNamespaces: {
+            ...s.manualNamespaces,
+            [context]: (s.manualNamespaces[context] ?? []).filter((n) => n !== namespace),
+          },
+        }));
+      },
+
+      access: {},
+      async ensureAccess(context, checks) {
+        const known = get().access;
+        const missing = checks.filter((c) => {
+          const key = accessKey(context, c);
+          return !(key in known) && !accessInFlight.has(key);
+        });
+        if (missing.length === 0) return;
+        const keys = missing.map((c) => accessKey(context, c));
+        keys.forEach((k) => accessInFlight.add(k));
+        let answers: (boolean | null)[] = [];
+        try {
+          answers = await api.checkAccess(context, missing);
+        } catch {
+          /* unreachable cluster: leave unknown (allowed), the real call will report */
+        } finally {
+          keys.forEach((k) => accessInFlight.delete(k));
+        }
+        set((s) => {
+          const access = { ...s.access };
+          keys.forEach((k, i) => (access[k] = answers[i] ?? null));
+          return { access };
+        });
+      },
+
+      discovery: {},
+      async loadDiscovery(context, force = false) {
+        if ((!force && get().discovery[context]) || discoveryInFlight.has(context)) return;
+        discoveryInFlight.add(context);
+        try {
+          const result = await api.discoverResources(context);
+          set((s) => ({ discovery: { ...s.discovery, [context]: result } }));
+        } catch (e) {
+          get().reportError(e, context, { silent: true });
+        } finally {
+          discoveryInFlight.delete(context);
         }
       },
 
@@ -222,7 +318,14 @@ export const useAppStore = create<AppState>()(
           namespaces: opts?.namespace ? [opts.namespace] : [],
           namespaceMode: opts?.namespace ? "single" : "all",
         };
-        set((s) => ({ tabs: [...s.tabs, tab], activeTabId: id }));
+        // Opening a tab re-asks permissions for that cluster (they may have changed).
+        set((s) => ({
+          tabs: [...s.tabs, tab],
+          activeTabId: id,
+          access: Object.fromEntries(
+            Object.entries(s.access).filter(([k]) => !k.startsWith(`${context}|`)),
+          ),
+        }));
         void get().loadNamespaces(context);
       },
       closeTab(id) {
@@ -327,9 +430,10 @@ export const useAppStore = create<AppState>()(
 
       toasts: [],
       pushToast(tone, message) {
+        if (get().toasts.some((t) => t.tone === tone && t.message === message)) return;
         const id = uid("toast");
-        set((s) => ({ toasts: [...s.toasts, { id, tone, message }] }));
-        setTimeout(() => get().dismissToast(id), 6000);
+        set((s) => ({ toasts: [...s.toasts, { id, tone, message }].slice(-MAX_TOASTS) }));
+        setTimeout(() => get().dismissToast(id), tone === "error" ? 10_000 : 6000);
       },
       dismissToast(id) {
         set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
@@ -338,7 +442,8 @@ export const useAppStore = create<AppState>()(
       setGkeAuthPrompt(p) {
         set({ gkeAuthPrompt: p });
       },
-      reportError(e, context) {
+      reportError(e, context, opts) {
+        const message = isAppError(e) ? e.message : String(e);
         if (isAppError(e)) {
           // Drop the cached (possibly stale) client so polling self-heals.
           if (context && (e.kind === "auth" || e.kind === "gkeAuth")) {
@@ -347,17 +452,24 @@ export const useAppStore = create<AppState>()(
           if (e.kind === "gkeAuth" && context) {
             set({ gkeAuthPrompt: { context, message: e.message } });
           }
-          get().pushToast("error", e.message);
-        } else {
-          get().pushToast("error", String(e));
         }
+        if (opts?.silent) return;
+        const key = `${context ?? ""}|${message}`;
+        const now = Date.now();
+        if (now - (lastErrorAt.get(key) ?? 0) < ERROR_REPEAT_MS) return;
+        lastErrorAt.set(key, now);
+        get().pushToast("error", message);
       },
     }),
     {
       name: "kubenexus-store",
       // Only persist the user's saved preferences, not live cluster data.
       partialize: (s) =>
-        ({ favorites: s.favorites, kubeconfigPath: s.kubeconfigPath }) as AppState,
+        ({
+          favorites: s.favorites,
+          kubeconfigPath: s.kubeconfigPath,
+          manualNamespaces: s.manualNamespaces,
+        }) as AppState,
     },
   ),
 );

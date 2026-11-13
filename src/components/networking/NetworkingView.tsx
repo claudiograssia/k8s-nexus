@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useMemo, type CSSProperties } from "react";
 import ReactFlow, { Background, Controls, type Edge, type Node } from "reactflow";
 import "reactflow/dist/style.css";
 import { Network, RefreshCw, ShieldCheck } from "lucide-react";
-import { api } from "@/lib/api";
 import type { GvkSpec, KubeObject } from "@/lib/types";
 import { getNested } from "@/lib/catalog";
-import { namespaceScope } from "@/lib/scope";
+import { useResourceList } from "@/components/common/useResourceList";
+import { ListError } from "@/components/common/ListError";
+import { LiveIndicator } from "@/components/common/LiveIndicator";
 import { getString, truncate } from "@/lib/utils";
-import { useAppStore, type ClusterTab } from "@/store/useAppStore";
+import { type ClusterTab } from "@/store/useAppStore";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CenteredSpinner } from "@/components/ui/spinner";
@@ -119,60 +120,25 @@ interface BackendConfigCard {
 }
 
 export function NetworkingView({ tab }: { tab: ClusterTab }) {
-  const reportError = useAppStore((s) => s.reportError);
+  const live = (spec: GvkSpec) => ({ context: tab.context, spec, selection: tab });
+  const ingressList = useResourceList(live(INGRESS_GVK));
+  const serviceList = useResourceList(live(SERVICE_GVK));
+  // CRDs that may not be installed: their errors are not shown.
+  const gatewayList = useResourceList(live(GATEWAY_GVK));
+  const routeList = useResourceList(live(HTTPROUTE_GVK));
+  const backendConfigList = useResourceList(live(BACKENDCONFIG_GVK));
 
-  const [ingresses, setIngresses] = useState<KubeObject[]>([]);
-  const [services, setServices] = useState<KubeObject[]>([]);
-  const [gateways, setGateways] = useState<KubeObject[]>([]);
-  const [httproutes, setHttproutes] = useState<KubeObject[]>([]);
-  const [backendConfigs, setBackendConfigs] = useState<KubeObject[]>([]);
-  const [ready, setReady] = useState(false);
-  const [loading, setLoading] = useState(false);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    const ctx = tab.context;
-    const scope = namespaceScope(tab);
-    const ns = scope.queryNamespace;
-
-    // Core resources: failures are surfaced to the user.
-    const [ing, svc] = await Promise.all([
-      api
-        .listResources(ctx, INGRESS_GVK, ns)
-        .catch((e: unknown) => {
-          reportError(e, ctx);
-          return [] as KubeObject[];
-        }),
-      api
-        .listResources(ctx, SERVICE_GVK, ns)
-        .catch((e: unknown) => {
-          reportError(e, ctx);
-          return [] as KubeObject[];
-        }),
-    ]);
-
-    // CRDs that may not be installed: swallow failures (treat as empty).
-    const [gw, routes, bcs] = await Promise.all([
-      api.listResources(ctx, GATEWAY_GVK, ns).catch(() => [] as KubeObject[]),
-      api.listResources(ctx, HTTPROUTE_GVK, ns).catch(() => [] as KubeObject[]),
-      api.listResources(ctx, BACKENDCONFIG_GVK, ns).catch(() => [] as KubeObject[]),
-    ]);
-
-    const keep = (o: KubeObject) => scope.matches(o.metadata?.namespace);
-    setIngresses(ing.filter(keep));
-    setServices(svc.filter(keep));
-    setGateways(gw.filter(keep));
-    setHttproutes(routes.filter(keep));
-    setBackendConfigs(bcs.filter(keep));
-    setLoading(false);
-    setReady(true);
-  }, [tab, reportError]);
-
-  const nsKey = tab.namespaces.join(",");
-  useEffect(() => {
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab.context, tab.namespaceMode, nsKey]);
+  const ingresses = ingressList.items;
+  const services = serviceList.items;
+  const gateways = gatewayList.items;
+  const httproutes = routeList.items;
+  const backendConfigs = backendConfigList.items;
+  const loading = ingressList.loading || serviceList.loading;
+  const ready = !loading || ingresses.length + services.length > 0;
+  const coreError = ingressList.error ?? serviceList.error;
+  const refresh = () => {
+    for (const l of [ingressList, serviceList, gatewayList, routeList, backendConfigList]) l.refresh();
+  };
 
   // (A) Topology graph -------------------------------------------------------
   const { nodes, edges } = useMemo<{ nodes: Node[]; edges: Edge[] }>(() => {
@@ -382,12 +348,24 @@ export function NetworkingView({ tab }: { tab: ClusterTab }) {
             {bcCards.length} services w/ BackendConfig
           </Badge>
         </div>
-        <div className="ml-auto">
-          <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
+        <div className="ml-auto flex items-center gap-2">
+          <LiveIndicator mode={ingressList.mode} />
+          <Button variant="outline" size="sm" onClick={refresh}>
             <RefreshCw className={loading ? "size-3.5 animate-spin" : "size-3.5"} /> Refresh
           </Button>
         </div>
       </div>
+
+      {coreError != null && (
+        <div className="-mx-4 -mb-2">
+          <ListError
+            context={tab.context}
+            tabId={tab.id}
+            error={coreError}
+            label={ingressList.error != null ? "Ingresses" : "Services"}
+          />
+        </div>
+      )}
 
       {/* (A) Topology graph */}
       <div className="h-[380px] overflow-hidden rounded-lg border border-border bg-card/40">

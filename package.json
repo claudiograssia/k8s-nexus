@@ -9,6 +9,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"
@@ -47,8 +48,8 @@
   "pnpm": {
     "onlyBuiltDependencies": ["esbuild"],
     "supportedArchitectures": {
-      "os": ["win32", "linux"],
-      "cpu": ["x64", "arm64"]
+      "os": ["current", "win32", "linux", "darwin"],
+      "cpu": ["current", "x64", "arm64"]
     }
   },
   "devDependencies": {
@@ -60,6 +61,7 @@
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.15",
     "typescript": "^5.6.3",
-    "vite": "^5.4.11"
+    "vite": "^5.4.11",
+    "vitest": "^2.1.9"
   }
 }

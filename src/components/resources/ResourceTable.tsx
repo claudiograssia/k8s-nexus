@@ -12,6 +12,7 @@ import {
   CircleCheck,
   Droplets,
   FolderTree,
+  Bug,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -34,6 +35,7 @@ export type RowAction =
   | "delete"
   | "exec"
   | "attach"
+  | "debug"
   | "files"
   | "trigger"
   | "cordon"
@@ -45,6 +47,8 @@ interface Props {
   items: KubeObject[];
   selectedKey: string | null;
   readOnly: boolean;
+  /** RBAC verdict per action; denied actions are hidden. */
+  allowed: (action: RowAction, obj: KubeObject) => boolean;
   onRowClick: (obj: KubeObject) => void;
   onAction: (action: RowAction, obj: KubeObject) => void;
 }
@@ -54,6 +58,7 @@ export function ResourceTable({
   items,
   selectedKey,
   readOnly,
+  allowed,
   onRowClick,
   onAction,
 }: Props) {
@@ -79,6 +84,9 @@ export function ResourceTable({
           {items.map((obj) => {
             const key = objKey(obj);
             const active = key === selectedKey;
+            const can = (a: RowAction) => allowed(a, obj);
+            const canScaleOrRestart =
+              (resourceType.scalable && can("scale")) || (resourceType.restartable && can("restart"));
             return (
               <tr
                 key={key}
@@ -109,33 +117,45 @@ export function ResourceTable({
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
                       <DropdownMenuItem onClick={() => onAction("edit", obj)}>
-                        <Pencil /> View / Edit YAML
+                        <Pencil /> {can("edit") && !readOnly ? "View / Edit YAML" : "View YAML"}
                       </DropdownMenuItem>
-                      {canLogs && (
+                      {canLogs && can("logs") && (
                         <DropdownMenuItem onClick={() => onAction("logs", obj)}>
                           <ScrollText /> Logs
                         </DropdownMenuItem>
                       )}
-                      {isPod && (
+                      {isPod && (can("exec") || can("attach")) && (
                         <>
                           <DropdownMenuSeparator />
-                          <DropdownMenuItem onClick={() => onAction("exec", obj)}>
-                            <SquareTerminal /> Shell (exec)
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => onAction("attach", obj)}>
-                            <Plug /> Attach (distroless)
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => onAction("files", obj)}>
-                            <FolderTree /> Browse files
-                          </DropdownMenuItem>
+                          {can("exec") && (
+                            <DropdownMenuItem onClick={() => onAction("exec", obj)}>
+                              <SquareTerminal /> Shell (exec)
+                            </DropdownMenuItem>
+                          )}
+                          {can("attach") && (
+                            <DropdownMenuItem onClick={() => onAction("attach", obj)}>
+                              <Plug /> Attach (distroless)
+                            </DropdownMenuItem>
+                          )}
+                          {can("debug") && !readOnly && (
+                            <DropdownMenuItem onClick={() => onAction("debug", obj)}>
+                              <Bug /> Debug container
+                            </DropdownMenuItem>
+                          )}
+                          {can("files") && (
+                            <DropdownMenuItem onClick={() => onAction("files", obj)}>
+                              <FolderTree /> Browse files
+                            </DropdownMenuItem>
+                          )}
                         </>
                       )}
-                      {isCronjob && (
+                      {isCronjob && can("trigger") && (
                         <DropdownMenuItem onClick={() => onAction("trigger", obj)} disabled={readOnly}>
                           <PlayCircle /> Trigger now
                         </DropdownMenuItem>
                       )}
                       {isNode &&
+                        can("cordon") &&
                         ((obj.spec as Record<string, unknown> | undefined)?.unschedulable === true ? (
                           <DropdownMenuItem onClick={() => onAction("uncordon", obj)} disabled={readOnly}>
                             <CircleCheck /> Uncordon
@@ -145,30 +165,34 @@ export function ResourceTable({
                             <Ban /> Cordon
                           </DropdownMenuItem>
                         ))}
-                      {isNode && (
+                      {isNode && can("drain") && (
                         <DropdownMenuItem onClick={() => onAction("drain", obj)} disabled={readOnly}>
                           <Droplets /> Drain…
                         </DropdownMenuItem>
                       )}
-                      {(resourceType.scalable || resourceType.restartable) && <DropdownMenuSeparator />}
-                      {resourceType.scalable && (
+                      {canScaleOrRestart && <DropdownMenuSeparator />}
+                      {resourceType.scalable && can("scale") && (
                         <DropdownMenuItem onClick={() => onAction("scale", obj)} disabled={readOnly}>
                           <Scaling /> Scale
                         </DropdownMenuItem>
                       )}
-                      {resourceType.restartable && (
+                      {resourceType.restartable && can("restart") && (
                         <DropdownMenuItem onClick={() => onAction("restart", obj)} disabled={readOnly}>
                           <RotateCw /> Restart
                         </DropdownMenuItem>
                       )}
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        destructive
-                        disabled={readOnly}
-                        onClick={() => onAction("delete", obj)}
-                      >
-                        <Trash2 /> Delete
-                      </DropdownMenuItem>
+                      {can("delete") && (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            destructive
+                            disabled={readOnly}
+                            onClick={() => onAction("delete", obj)}
+                          >
+                            <Trash2 /> Delete
+                          </DropdownMenuItem>
+                        </>
+                      )}
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </td>

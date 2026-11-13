@@ -1,8 +1,11 @@
 import * as React from "react";
 import { api } from "@/lib/api";
 import type { KubeObject, PodUsage } from "@/lib/types";
+import { useResourceList } from "@/components/common/useResourceList";
+import { ListError } from "@/components/common/ListError";
 import { formatBytes, formatCpu } from "@/lib/utils";
-import { namespaceScope } from "@/lib/scope";
+import { parseCpuMilli, parseMemBytes } from "@/lib/quantity";
+import { fetchScoped } from "@/lib/listing";
 import { useAppStore, type ClusterTab } from "@/store/useAppStore";
 import { Badge } from "@/components/ui/badge";
 import { CenteredSpinner } from "@/components/ui/spinner";
@@ -17,67 +20,6 @@ const POD_GVK = {
 } as const;
 
 const REFRESH_MS = 15_000;
-
-/** Parse a Kubernetes CPU quantity into millicores. */
-function parseCpuMilli(v: unknown): number {
-  if (typeof v === "number") return v * 1000;
-  if (typeof v !== "string" || v.length === 0) return 0;
-  const s = v.trim();
-  if (s.endsWith("m")) {
-    const n = parseFloat(s.slice(0, -1));
-    return Number.isFinite(n) ? n : 0;
-  }
-  if (s.endsWith("n")) {
-    // nanocores
-    const n = parseFloat(s.slice(0, -1));
-    return Number.isFinite(n) ? n / 1_000_000 : 0;
-  }
-  if (s.endsWith("u")) {
-    // microcores
-    const n = parseFloat(s.slice(0, -1));
-    return Number.isFinite(n) ? n / 1000 : 0;
-  }
-  const n = parseFloat(s);
-  return Number.isFinite(n) ? n * 1000 : 0;
-}
-
-/** Parse a Kubernetes memory quantity into bytes. */
-function parseMemBytes(v: unknown): number {
-  if (typeof v === "number") return v;
-  if (typeof v !== "string" || v.length === 0) return 0;
-  const s = v.trim();
-  const binary: Record<string, number> = {
-    Ki: 1024,
-    Mi: 1024 ** 2,
-    Gi: 1024 ** 3,
-    Ti: 1024 ** 4,
-    Pi: 1024 ** 5,
-    Ei: 1024 ** 6,
-  };
-  const decimal: Record<string, number> = {
-    k: 1000,
-    K: 1000,
-    M: 1000 ** 2,
-    G: 1000 ** 3,
-    T: 1000 ** 4,
-    P: 1000 ** 5,
-    E: 1000 ** 6,
-  };
-  for (const suffix of Object.keys(binary)) {
-    if (s.endsWith(suffix)) {
-      const n = parseFloat(s.slice(0, -suffix.length));
-      return Number.isFinite(n) ? n * binary[suffix] : 0;
-    }
-  }
-  for (const suffix of Object.keys(decimal)) {
-    if (s.endsWith(suffix)) {
-      const n = parseFloat(s.slice(0, -suffix.length));
-      return Number.isFinite(n) ? n * decimal[suffix] : 0;
-    }
-  }
-  const n = parseFloat(s);
-  return Number.isFinite(n) ? n : 0;
-}
 
 interface ResourceQuantities {
   cpu?: unknown;
@@ -276,45 +218,39 @@ const TH_NUM = "px-2 py-1.5 text-right font-medium";
 const TH_TEXT = "px-2 py-1.5 text-left font-medium";
 
 export function FinOpsView({ tab }: { tab: ClusterTab }) {
-  const [rows, setRows] = React.useState<Row[]>([]);
-  const [loading, setLoading] = React.useState(true);
+  const [usage, setUsage] = React.useState<PodUsage[]>([]);
   const [query, setQuery] = React.useState("");
+  const podList = useResourceList({ context: tab.context, spec: POD_GVK, selection: tab });
 
+  // Metrics have no watch: poll them.
   React.useEffect(() => {
     let cancelled = false;
-    const scope = namespaceScope(tab);
-
     const load = async () => {
-      let pods: KubeObject[] = [];
-      let usage: PodUsage[] = [];
       try {
-        const all = await api.listResources(
+        const next = await fetchScoped(
           tab.context,
-          POD_GVK,
-          scope.queryNamespace,
+          tab,
+          { id: "metrics.k8s.io/pods", namespaced: true },
+          "pod metrics",
+          (ns) => api.podUsage(tab.context, ns),
         );
-        pods = all.filter((p) => scope.matches(p.metadata?.namespace));
+        if (!cancelled) setUsage(next);
       } catch (e) {
-        useAppStore.getState().reportError(e, tab.context);
+        if (!cancelled) useAppStore.getState().reportError(e, tab.context);
       }
-      try {
-        usage = await api.podUsage(tab.context, scope.queryNamespace);
-      } catch (e) {
-        useAppStore.getState().reportError(e, tab.context);
-      }
-      if (cancelled) return;
-      setRows(buildRows(pods, usage));
-      setLoading(false);
     };
-
-    setLoading(true);
+    setUsage([]);
     void load();
     const timer = window.setInterval(() => void load(), REFRESH_MS);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab.context, tab.namespaceMode, tab.namespaces.join(",")]);
+
+  const rows = React.useMemo(() => buildRows(podList.items, usage), [podList.items, usage]);
+  const loading = podList.loading && podList.items.length === 0;
 
   const filtered = React.useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -357,12 +293,15 @@ export function FinOpsView({ tab }: { tab: ClusterTab }) {
     };
   }, [rows]);
 
-  if (loading) {
+  if (loading && podList.error == null) {
     return <CenteredSpinner label="Analyzing pod right-sizing…" />;
   }
 
   return (
     <div className="flex h-full flex-col">
+      {podList.error != null && (
+        <ListError context={tab.context} tabId={tab.id} error={podList.error} label="Pods" />
+      )}
       <div className="shrink-0 space-y-3 p-3">
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
           <SummaryCard label="Containers" value={String(summary.total)} />

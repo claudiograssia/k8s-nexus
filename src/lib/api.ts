@@ -3,6 +3,8 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AccessCheck,
+  DiscoveryResult,
   DrainPod,
   FileEntry,
   GvkSpec,
@@ -14,6 +16,7 @@ import type {
   PodUsage,
   PortForwardInfo,
   PortForwardRequest,
+  WatchRequest,
 } from "./types";
 
 export const api = {
@@ -31,13 +34,27 @@ export const api = {
     spec: GvkSpec,
     namespace?: string | null,
     labelSelector?: string | null,
+    fieldSelector?: string | null,
   ) =>
     invoke<KubeObject[]>("list_resources", {
       context,
       spec,
       namespace: namespace ?? null,
       labelSelector: labelSelector ?? null,
+      fieldSelector: fieldSelector ?? null,
     }),
+
+  /** Every listable kind the cluster serves (built-in and CRDs). */
+  discoverResources: (context: string) => invoke<DiscoveryResult>("discover_resources", { context }),
+
+  /** One answer per check, in order; null = could not be determined. */
+  checkAccess: (context: string, checks: AccessCheck[]) =>
+    invoke<(boolean | null)[]>("check_access", { context, checks }),
+
+  // Live lists (changes arrive as `watch://batch` events) --------------------
+  startWatch: (watchId: string, request: WatchRequest) =>
+    invoke<void>("start_watch", { watchId, request }),
+  stopWatch: (watchId: string) => invoke<void>("stop_watch", { watchId }),
 
   getResourceYaml: (
     context: string,
@@ -55,8 +72,9 @@ export const api = {
   ) =>
     invoke<KubeObject>("get_resource_json", { context, spec, namespace, name }),
 
-  applyResourceYaml: (context: string, spec: GvkSpec, yaml: string) =>
-    invoke<KubeObject>("apply_resource_yaml", { context, spec, yaml }),
+  /** Server-side apply. `force` takes over fields owned by other managers. */
+  applyResourceYaml: (context: string, spec: GvkSpec, yaml: string, force = false) =>
+    invoke<KubeObject>("apply_resource_yaml", { context, spec, yaml, force }),
 
   deleteResource: (
     context: string,
@@ -122,10 +140,11 @@ export const api = {
     namespace: string,
     pod: string,
     container: string | null,
-    mode: "exec" | "attach",
+    mode: "exec" | "attach" | "debug",
     shell: string | null,
     rows: number,
     cols: number,
+    image: string | null = null,
   ) =>
     invoke<void>("pty_open_exec", {
       id,
@@ -135,6 +154,7 @@ export const api = {
       container,
       mode,
       shell,
+      image,
       kubeconfig: null,
       rows,
       cols,

@@ -13,10 +13,16 @@ pub enum ErrorKind {
     /// A GKE / gcloud auth token expired or the `gke-gcloud-auth-plugin`
     /// failed. The frontend uses this to show the re-auth button.
     GkeAuth,
-    /// Generic authentication / authorization failure (401/403).
+    /// Authentication failure (401): credentials missing or rejected.
     Auth,
+    /// Authorization failure (403): authenticated, but RBAC / IAM denies the
+    /// verb on this resource or namespace. Not fixed by refreshing the client.
+    Forbidden,
     /// Requested resource / context was not found.
     NotFound,
+    /// 409: a server-side apply would take over fields owned by another
+    /// manager, or the object changed in the meantime.
+    Conflict,
     /// The kubeconfig could not be read or parsed.
     Config,
     /// A blocked write while Safe Mode (read-only) is active.
@@ -82,11 +88,13 @@ impl From<kube::Error> for AppError {
         // kube surfaces API status errors we can classify precisely.
         if let kube::Error::Api(status) = &e {
             let kind = match status.code {
-                401 | 403 => ErrorKind::Auth,
+                401 => ErrorKind::Auth,
+                403 => ErrorKind::Forbidden,
                 404 => ErrorKind::NotFound,
+                409 => ErrorKind::Conflict,
                 _ => ErrorKind::Internal,
             };
-            return AppError::new(kind, status.message.clone());
+            return AppError::new(kind, humanize(&status.message, Some(status.code)));
         }
         classify(&e.to_string())
     }
@@ -123,7 +131,9 @@ pub fn classify(message: &str) -> AppError {
 
     let kind = if is_gke {
         ErrorKind::GkeAuth
-    } else if lower.contains("401") || lower.contains("403") || lower.contains("unauthorized") {
+    } else if lower.contains("403") || lower.contains("forbidden") {
+        ErrorKind::Forbidden
+    } else if lower.contains("401") || lower.contains("unauthorized") {
         ErrorKind::Auth
     } else if lower.contains("not found") || lower.contains("404") {
         ErrorKind::NotFound
@@ -137,7 +147,171 @@ pub fn classify(message: &str) -> AppError {
         ErrorKind::Internal
     };
 
-    AppError::new(kind, message.to_string())
+    AppError::new(kind, humanize(message, None))
+}
+
+/// Turn a raw error body into something fit for a toast.
+///
+/// When the API server (or a proxy in front of it) answers with a non-JSON
+/// body, kube-rs stores the whole body Debug-escaped in the message. GKE's
+/// DNS-based control-plane endpoint (`*.gke.goog`) does exactly that on IAM
+/// denials: it returns Google's HTML "Error 403 (Forbidden)" page.
+pub fn humanize(message: &str, code: Option<u16>) -> String {
+    let text = unescape_debug(message.trim());
+    let lower = text.to_lowercase();
+    if !(lower.contains("<html") || lower.contains("<!doctype")) {
+        return text;
+    }
+
+    let is_google = lower.contains("google.com/images/errors") || lower.contains("that’s an error");
+    let summary = html_summary(&text);
+    let code = code.or_else(|| {
+        regex::Regex::new(r"\b([45]\d\d)\b")
+            .ok()?
+            .captures(&summary)?
+            .get(1)?
+            .as_str()
+            .parse()
+            .ok()
+    });
+
+    if is_google && code == Some(403) {
+        return format!(
+            "403 Forbidden from Google's GKE endpoint: {summary} \
+             The active gcloud account likely lacks the IAM permission \
+             `container.clusters.connect` (e.g. role Kubernetes Engine Cluster Viewer), \
+             required by the DNS-based control-plane endpoint."
+        );
+    }
+    match code {
+        Some(c) if !summary.starts_with(&c.to_string()) => format!("HTTP {c}: {summary}"),
+        _ => summary,
+    }
+}
+
+/// Undo the `{:?}` escaping kube-rs applies to unparseable error bodies.
+fn unescape_debug(s: &str) -> String {
+    let Some(inner) = s.strip_prefix('"').and_then(|s| s.strip_suffix('"')) else {
+        return s.to_string();
+    };
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            Some('r') => out.push('\r'),
+            Some('0') => out.push('\0'),
+            Some('u') => {
+                // `\u{XXXX}`
+                let hex: String = chars.by_ref().skip(1).take_while(|c| *c != '}').collect();
+                if let Some(ch) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                    out.push(ch);
+                }
+            }
+            Some(other) => out.push(other),
+            None => {}
+        }
+    }
+    out
+}
+
+/// Readable text of an HTML error page: `<title>` and `<style>` dropped,
+/// tags stripped, whitespace collapsed, capped in length.
+fn html_summary(html: &str) -> String {
+    let drop_blocks = regex::Regex::new(r"(?is)<style[^>]*>.*?</style>|<script[^>]*>.*?</script>|<title[^>]*>.*?</title>|<head[^>]*>.*?</head>").unwrap();
+    let tags = regex::Regex::new(r"(?s)<[^>]*>").unwrap();
+    let ws = regex::Regex::new(r"\s+").unwrap();
+
+    let body = drop_blocks.replace_all(html, " ");
+    let body = tags.replace_all(&body, " ");
+    let mut text = ws.replace_all(&body, " ").trim().to_string();
+    // Google pages carry filler around the actual reason.
+    text = text
+        .replace("That’s all we know.", "")
+        .replace("That’s an error.", "")
+        .trim()
+        .to_string();
+    if let Some(rest) = regex::Regex::new(r"^\d{3}\.\s*")
+        .unwrap()
+        .find(&text)
+        .map(|m| text[m.end()..].to_string())
+    {
+        text = rest;
+    }
+    if text.chars().count() > 300 {
+        text = text.chars().take(300).collect::<String>() + "…";
+    }
+    if text.is_empty() {
+        "the server returned an HTML error page".into()
+    } else {
+        text
+    }
 }
 
 pub type AppResult<T> = Result<T, AppError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn humanizes_google_403_page() {
+        let body = "<!DOCTYPE html>\n<html lang=en>\n  <meta charset=utf-8>\n  <title>Error 403 (Forbidden)!!1</title>\n  <style>*{margin:0}</style>\n  <a href=//www.google.com/><span id=logo aria-label=Google></span></a>\n  <p><b>403.</b> <ins>That’s an error.</ins>\n  <p>Your client does not have permission to get URL <code>/api/v1/pods</code> from this server.  <ins>That’s all we know.</ins>\n";
+        let msg = humanize(&format!("{body:?}"), Some(403));
+        assert!(msg.starts_with("403 Forbidden from Google"), "{msg}");
+        assert!(msg.contains("/api/v1/pods"), "{msg}");
+        assert!(msg.contains("container.clusters.connect"), "{msg}");
+        assert!(!msg.contains('<'), "{msg}");
+    }
+
+    #[test]
+    fn maps_api_status_codes() {
+        let api = |code: u16| {
+            AppError::from(kube::Error::Api(kube::core::ErrorResponse {
+                status: "Failure".into(),
+                message: format!("status {code}"),
+                reason: String::new(),
+                code,
+            }))
+            .kind
+        };
+        assert_eq!(api(401), ErrorKind::Auth);
+        assert_eq!(api(403), ErrorKind::Forbidden);
+        assert_eq!(api(404), ErrorKind::NotFound);
+        assert_eq!(api(409), ErrorKind::Conflict);
+        assert_eq!(api(500), ErrorKind::Internal);
+    }
+
+    #[test]
+    fn classifies_opaque_messages() {
+        let kind = |m: &str| classify(m).kind;
+        assert_eq!(
+            kind("exec plugin: gke-gcloud-auth-plugin failed: Reauthentication failed"),
+            ErrorKind::GkeAuth
+        );
+        assert_eq!(
+            kind("pods is forbidden: User cannot list"),
+            ErrorKind::Forbidden
+        );
+        assert_eq!(kind("401 Unauthorized"), ErrorKind::Auth);
+        assert_eq!(kind("context \"x\" not found"), ErrorKind::NotFound);
+        assert_eq!(
+            kind("dial tcp 10.0.0.1:443: i/o timeout"),
+            ErrorKind::Connection
+        );
+        assert_eq!(kind("something odd"), ErrorKind::Internal);
+    }
+
+    #[test]
+    fn leaves_plain_messages_alone() {
+        assert_eq!(
+            humanize("pods is forbidden", Some(403)),
+            "pods is forbidden"
+        );
+    }
+}

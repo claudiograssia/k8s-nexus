@@ -1,35 +1,55 @@
 import { useState } from "react";
-import { X, ScrollText, Scaling, RotateCw, SquareTerminal, FolderTree } from "lucide-react";
+import { X, ScrollText, Scaling, RotateCw, SquareTerminal, FolderTree, Bug } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn, objNamespace } from "@/lib/utils";
 import type { ResourceType } from "@/lib/catalog";
 import { supportsLogs } from "@/lib/catalog";
 import type { KubeObject } from "@/lib/types";
+import type { RowAction } from "./ResourceTable";
 import { YamlEditor } from "@/components/yaml/YamlEditor";
 import { ConfigMapDetail } from "./detail/ConfigMapDetail";
 import { SecretDetail } from "./detail/SecretDetail";
 import { PodDetail } from "./detail/PodDetail";
+import { NodeDetail } from "./detail/NodeDetail";
 import { ServiceAccountDetail } from "./detail/ServiceAccountDetail";
 import { GenericDetail } from "./detail/GenericDetail";
 import { RevisionsPanel } from "./detail/RevisionsPanel";
+import { EventsPanel } from "./detail/EventsPanel";
 
 interface Props {
   context: string;
   resourceType: ResourceType;
   obj: KubeObject;
   readOnly: boolean;
+  /** RBAC verdict per action; denied actions are hidden. */
+  allowed: (action: RowAction, obj: KubeObject) => boolean;
   onClose: () => void;
   onOpenLogs: (obj: KubeObject) => void;
   onScale: (obj: KubeObject) => void;
   onRestart: (obj: KubeObject) => void;
   onExec: (obj: KubeObject) => void;
+  onDebug: (obj: KubeObject) => void;
   onFiles: (obj: KubeObject) => void;
+  /** Show a pod in the Pods view (from a node's pod list). */
+  onOpenPod?: (pod: KubeObject) => void;
 }
 
-function Overview({ resourceType, obj }: { resourceType: ResourceType; obj: KubeObject }) {
+function Overview({
+  context,
+  resourceType,
+  obj,
+  onOpenPod,
+}: {
+  context: string;
+  resourceType: ResourceType;
+  obj: KubeObject;
+  onOpenPod?: (pod: KubeObject) => void;
+}) {
   switch (resourceType.detail) {
     case "pod":
-      return <PodDetail obj={obj} />;
+      return <PodDetail context={context} obj={obj} />;
+    case "node":
+      return <NodeDetail context={context} obj={obj} onOpenPod={onOpenPod} />;
     case "configmap":
       return <ConfigMapDetail obj={obj} />;
     case "secret":
@@ -41,27 +61,37 @@ function Overview({ resourceType, obj }: { resourceType: ResourceType; obj: Kube
   }
 }
 
+type DetailTab = "overview" | "events" | "revisions" | "yaml";
+
 export function ResourceDetail({
   context,
   resourceType,
   obj,
   readOnly,
+  allowed,
   onClose,
   onOpenLogs,
   onScale,
   onRestart,
   onExec,
+  onDebug,
   onFiles,
+  onOpenPod,
 }: Props) {
-  const [tab, setTab] = useState<"overview" | "yaml" | "revisions">("overview");
+  const [tab, setTab] = useState<DetailTab>("overview");
   const name = obj.metadata?.name ?? "";
   const namespace = objNamespace(obj) ?? null;
-  const canLogs = supportsLogs(resourceType);
+  const can = (a: RowAction) => allowed(a, obj);
+  const canLogs = supportsLogs(resourceType) && can("logs");
   const isPod = resourceType.detail === "pod";
   const hasRevisions = resourceType.id === "deployments";
-  const tabs: Array<"overview" | "yaml" | "revisions"> = hasRevisions
-    ? ["overview", "revisions", "yaml"]
-    : ["overview", "yaml"];
+  const isEvent = resourceType.gvk.kind === "Event";
+  const tabs: DetailTab[] = [
+    "overview",
+    ...(isEvent ? [] : (["events"] as const)),
+    ...(hasRevisions ? (["revisions"] as const) : []),
+    "yaml",
+  ];
 
   return (
     <div className="flex h-full w-[560px] shrink-0 flex-col border-l border-border bg-card/60">
@@ -73,12 +103,17 @@ export function ResourceDetail({
             {namespace ? ` · ${namespace}` : ""}
           </p>
         </div>
-        {isPod && (
+        {isPod && can("exec") && (
           <Button size="xs" variant="outline" onClick={() => onExec(obj)}>
             <SquareTerminal /> Shell
           </Button>
         )}
-        {isPod && (
+        {isPod && can("debug") && !readOnly && (
+          <Button size="xs" variant="outline" onClick={() => onDebug(obj)} title="Ephemeral debug container (busybox)">
+            <Bug /> Debug
+          </Button>
+        )}
+        {isPod && can("files") && (
           <Button size="xs" variant="outline" onClick={() => onFiles(obj)}>
             <FolderTree /> Files
           </Button>
@@ -88,12 +123,12 @@ export function ResourceDetail({
             <ScrollText /> Logs
           </Button>
         )}
-        {resourceType.restartable && (
+        {resourceType.restartable && can("restart") && (
           <Button size="xs" variant="outline" onClick={() => onRestart(obj)} disabled={readOnly}>
             <RotateCw /> Restart
           </Button>
         )}
-        {resourceType.scalable && (
+        {resourceType.scalable && can("scale") && (
           <Button size="xs" variant="outline" onClick={() => onScale(obj)} disabled={readOnly}>
             <Scaling /> Scale
           </Button>
@@ -121,7 +156,11 @@ export function ResourceDetail({
       <div className="min-h-0 flex-1 overflow-hidden">
         {tab === "overview" ? (
           <div className="h-full overflow-y-auto p-3">
-            <Overview resourceType={resourceType} obj={obj} />
+            <Overview context={context} resourceType={resourceType} obj={obj} onOpenPod={onOpenPod} />
+          </div>
+        ) : tab === "events" ? (
+          <div className="h-full overflow-y-auto">
+            <EventsPanel context={context} obj={obj} />
           </div>
         ) : tab === "revisions" ? (
           <div className="h-full overflow-y-auto">
@@ -133,7 +172,7 @@ export function ResourceDetail({
             spec={resourceType.gvk}
             namespace={namespace}
             name={name}
-            readOnly={readOnly}
+            readOnly={readOnly || !can("edit")}
           />
         )}
       </div>

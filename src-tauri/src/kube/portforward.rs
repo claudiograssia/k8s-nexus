@@ -127,11 +127,7 @@ impl PortForwards {
     }
 
     pub fn list(&self) -> Vec<PortForwardInfo> {
-        self.inner
-            .lock()
-            .values()
-            .map(|e| e.info.clone())
-            .collect()
+        self.inner.lock().values().map(|e| e.info.clone()).collect()
     }
 
     #[allow(dead_code)]

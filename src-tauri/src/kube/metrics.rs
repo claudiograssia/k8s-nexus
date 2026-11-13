@@ -56,7 +56,8 @@ fn pod_metrics_gvk() -> GvkSpec {
 }
 
 pub async fn node_usage(pool: &ClientPool, context: &str) -> AppResult<Vec<NodeUsage>> {
-    let items = crate::kube::resources::list(pool, context, &node_metrics_gvk(), None, None).await?;
+    let items =
+        crate::kube::resources::list(pool, context, &node_metrics_gvk(), None, None, None).await?;
     Ok(items
         .into_iter()
         .filter_map(|item| {
@@ -77,7 +78,8 @@ pub async fn pod_usage(
     namespace: Option<&str>,
 ) -> AppResult<Vec<PodUsage>> {
     let items =
-        crate::kube::resources::list(pool, context, &pod_metrics_gvk(), namespace, None).await?;
+        crate::kube::resources::list(pool, context, &pod_metrics_gvk(), namespace, None, None)
+            .await?;
     Ok(items
         .into_iter()
         .filter_map(|item| {
@@ -186,4 +188,47 @@ pub fn parse_memory(v: Option<&Value>) -> f64 {
 
     // Plain bytes (possibly with fractional exponent form).
     s.parse::<f64>().unwrap_or(0.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_cpu, parse_memory};
+    use serde_json::json;
+
+    fn cpu(s: &str) -> f64 {
+        parse_cpu(Some(&json!(s)))
+    }
+    fn mem(s: &str) -> f64 {
+        parse_memory(Some(&json!(s)))
+    }
+
+    #[test]
+    fn parses_cpu_quantities_to_millicores() {
+        assert_eq!(cpu("100m"), 100.0);
+        assert_eq!(cpu("1"), 1000.0);
+        assert_eq!(cpu("0.5"), 500.0);
+        assert_eq!(cpu("250000000n"), 250.0);
+        assert_eq!(cpu("1500u"), 1.5);
+        assert_eq!(cpu(""), 0.0);
+        assert_eq!(cpu("garbage"), 0.0);
+        assert_eq!(parse_cpu(None), 0.0);
+        assert_eq!(
+            parse_cpu(Some(&json!(2))),
+            0.0,
+            "numbers are not quantities strings"
+        );
+    }
+
+    #[test]
+    fn parses_memory_quantities_to_bytes() {
+        assert_eq!(mem("128Mi"), 128.0 * 1024.0 * 1024.0);
+        assert_eq!(mem("1Gi"), 1024f64.powi(3));
+        assert_eq!(mem("512Ki"), 512.0 * 1024.0);
+        assert_eq!(mem("1G"), 1e9);
+        assert_eq!(mem("500M"), 5e8);
+        assert_eq!(mem("100k"), 1e5);
+        assert_eq!(mem("1048576"), 1_048_576.0);
+        assert_eq!(mem(" 2Mi "), 2.0 * 1024.0 * 1024.0);
+        assert_eq!(parse_memory(None), 0.0);
+    }
 }

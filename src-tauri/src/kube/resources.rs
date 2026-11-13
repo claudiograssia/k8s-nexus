@@ -8,8 +8,7 @@ use crate::error::{AppError, AppResult};
 use crate::kube::client::ClientPool;
 use chrono::Utc;
 use kube::api::{
-    Api, ApiResource, DeleteParams, DynamicObject, GroupVersionKind, ListParams, Patch,
-    PatchParams,
+    Api, ApiResource, DeleteParams, DynamicObject, GroupVersionKind, ListParams, Patch, PatchParams,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -38,7 +37,7 @@ impl GvkSpec {
     }
 }
 
-fn api_for(
+pub(crate) fn api_for(
     pool_client: kube::Client,
     spec: &GvkSpec,
     namespace: Option<&str>,
@@ -46,9 +45,7 @@ fn api_for(
     let ar = spec.api_resource();
     if spec.namespaced {
         match namespace {
-            Some(ns) if !ns.is_empty() && ns != "*" => {
-                Api::namespaced_with(pool_client, ns, &ar)
-            }
+            Some(ns) if !ns.is_empty() && ns != "*" => Api::namespaced_with(pool_client, ns, &ar),
             _ => Api::all_with(pool_client, &ar),
         }
     } else {
@@ -65,15 +62,17 @@ pub async fn list(
     spec: &GvkSpec,
     namespace: Option<&str>,
     label_selector: Option<&str>,
+    field_selector: Option<&str>,
 ) -> AppResult<Vec<Value>> {
     let client = pool.get(context).await?;
     let api = api_for(client, spec, namespace);
 
     let mut lp = ListParams::default();
-    if let Some(sel) = label_selector {
-        if !sel.is_empty() {
-            lp = lp.labels(sel);
-        }
+    if let Some(sel) = label_selector.filter(|s| !s.is_empty()) {
+        lp = lp.labels(sel);
+    }
+    if let Some(sel) = field_selector.filter(|s| !s.is_empty()) {
+        lp = lp.fields(sel);
     }
 
     let list = api.list(&lp).await?;
@@ -113,14 +112,19 @@ pub async fn get_yaml(
 }
 
 /// Server-side apply an edited YAML document back to the cluster.
+///
+/// Without `force`, changing a field owned by another manager (Helm, Argo CD,
+/// kubectl, a controller) fails with a 409 listing the conflicts, so the user
+/// can decide whether to take ownership.
 pub async fn apply_yaml(
     pool: &ClientPool,
     context: &str,
     spec: &GvkSpec,
     yaml: &str,
+    force: bool,
 ) -> AppResult<Value> {
-    let obj: DynamicObject = serde_yaml::from_str(yaml)
-        .map_err(|e| AppError::internal(format!("Invalid YAML: {e}")))?;
+    let obj: DynamicObject =
+        serde_yaml::from_str(yaml).map_err(|e| AppError::internal(format!("Invalid YAML: {e}")))?;
 
     let name = obj
         .metadata
@@ -132,7 +136,10 @@ pub async fn apply_yaml(
     let client = pool.get(context).await?;
     let api = api_for(client, spec, namespace.as_deref());
 
-    let pp = PatchParams::apply("kubenexus-gke").force();
+    let mut pp = PatchParams::apply("kubenexus-gke");
+    if force {
+        pp = pp.force();
+    }
     let applied = api.patch(&name, &pp, &Patch::Apply(&obj)).await?;
     Ok(serde_json::to_value(applied)?)
 }
@@ -216,4 +223,61 @@ fn strip_noise(mut value: Value) -> Value {
         }
     }
     value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{strip_noise, GvkSpec};
+    use serde_json::json;
+
+    #[test]
+    fn strips_server_managed_metadata() {
+        let out = strip_noise(json!({
+            "metadata": {
+                "name": "web",
+                "uid": "123",
+                "resourceVersion": "9",
+                "generation": 2,
+                "creationTimestamp": "2026-01-01T00:00:00Z",
+                "managedFields": [{}],
+                "labels": { "app": "web" },
+                "annotations": {
+                    "kubectl.kubernetes.io/last-applied-configuration": "{}"
+                }
+            },
+            "spec": { "replicas": 2 }
+        }));
+        assert_eq!(
+            out,
+            json!({
+                "metadata": { "name": "web", "labels": { "app": "web" } },
+                "spec": { "replicas": 2 }
+            })
+        );
+    }
+
+    #[test]
+    fn keeps_other_annotations() {
+        let out = strip_noise(json!({
+            "metadata": { "annotations": {
+                "kubectl.kubernetes.io/last-applied-configuration": "{}",
+                "team": "core"
+            }}
+        }));
+        assert_eq!(out["metadata"]["annotations"], json!({ "team": "core" }));
+    }
+
+    #[test]
+    fn uses_the_explicit_plural() {
+        let spec = GvkSpec {
+            group: "networking.gke.io".into(),
+            version: "v1beta1".into(),
+            kind: "ManagedCertificate".into(),
+            plural: "managedcertificates".into(),
+            namespaced: true,
+        };
+        let ar = spec.api_resource();
+        assert_eq!(ar.plural, "managedcertificates");
+        assert_eq!(ar.api_version, "networking.gke.io/v1beta1");
+    }
 }

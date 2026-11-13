@@ -19,14 +19,18 @@ import {
   MemoryStick,
   Server,
   ShieldAlert,
+  TriangleAlert,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { CenteredSpinner } from "@/components/ui/spinner";
 import { api } from "@/lib/api";
-import { namespaceScope } from "@/lib/scope";
-import { useAppStore, type ClusterTab } from "@/store/useAppStore";
-import type { KubeObject, NodeUsage, PodUsage } from "@/lib/types";
+import { fetchScoped, isNeedsNamespace } from "@/lib/listing";
+import { useResourceList } from "@/components/common/useResourceList";
+import { ListError } from "@/components/common/ListError";
+import type { ClusterTab } from "@/store/useAppStore";
+import { isAppError, type KubeObject, type NodeUsage, type PodUsage } from "@/lib/types";
 import { formatBytes, formatCpu } from "@/lib/utils";
+import { parseCpuMilli, parseMemBytes } from "@/lib/quantity";
 
 // ---------------------------------------------------------------------------
 // Theme colors (match index.css HSL tokens).
@@ -60,54 +64,6 @@ function asRecord(v: unknown): Record<string, unknown> | undefined {
 
 function asArray(v: unknown): unknown[] {
   return Array.isArray(v) ? v : [];
-}
-
-/** Parse a Kubernetes CPU quantity into millicores. Accepts "500m", "2", "1.5", "250000000n", "250000u". */
-function parseCpuMilli(v: unknown): number {
-  if (typeof v !== "string" || v.trim() === "") return 0;
-  const s = v.trim();
-  if (s.endsWith("m")) {
-    const n = parseFloat(s.slice(0, -1));
-    return Number.isFinite(n) ? n : 0;
-  }
-  if (s.endsWith("n")) {
-    const n = parseFloat(s.slice(0, -1));
-    return Number.isFinite(n) ? n / 1e6 : 0;
-  }
-  if (s.endsWith("u")) {
-    const n = parseFloat(s.slice(0, -1));
-    return Number.isFinite(n) ? n / 1e3 : 0;
-  }
-  const cores = parseFloat(s);
-  return Number.isFinite(cores) ? cores * 1000 : 0;
-}
-
-/** Parse a Kubernetes memory quantity into bytes. Accepts binary (Ki/Mi/Gi…), decimal (K/M/G…) or plain bytes. */
-function parseMemBytes(v: unknown): number {
-  if (typeof v !== "string" || v.trim() === "") return 0;
-  const m = v.trim().match(/^([0-9.]+)\s*([A-Za-z]*)$/);
-  if (!m) return 0;
-  const value = parseFloat(m[1]);
-  if (!Number.isFinite(value)) return 0;
-  const unit = m[2];
-  const factors: Record<string, number> = {
-    "": 1,
-    Ki: 1024,
-    Mi: 1024 ** 2,
-    Gi: 1024 ** 3,
-    Ti: 1024 ** 4,
-    Pi: 1024 ** 5,
-    Ei: 1024 ** 6,
-    K: 1e3,
-    M: 1e6,
-    G: 1e9,
-    T: 1e12,
-    P: 1e15,
-    E: 1e18,
-    k: 1e3,
-  };
-  const factor = factors[unit] ?? 1;
-  return value * factor;
 }
 
 // ---------------------------------------------------------------------------
@@ -190,83 +146,76 @@ interface LinterFinding {
 }
 
 // ---------------------------------------------------------------------------
+// Per-source load failures (typical with narrow RBAC / IAM permissions).
+// ---------------------------------------------------------------------------
+type Source = "pods" | "nodes" | "nodeUsage" | "podUsage";
+type SourceErrors = Partial<Record<Source, string>>;
+
+const errorMessage = (e: unknown) => (isAppError(e) ? e.message : String(e));
+
+const POD_GVK = { group: "", version: "v1", kind: "Pod", plural: "pods", namespaced: true };
+const NODE_GVK = { group: "", version: "v1", kind: "Node", plural: "nodes", namespaced: false };
+
+const SOURCE_LABELS: Record<Source, string> = {
+  pods: "Pods",
+  nodes: "Nodes",
+  nodeUsage: "Node metrics",
+  podUsage: "Pod metrics",
+};
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 export function DashboardView({ tab }: { tab: ClusterTab }) {
-  const [loading, setLoading] = React.useState(true);
-  const [pods, setPods] = React.useState<KubeObject[]>([]);
-  const [nodes, setNodes] = React.useState<KubeObject[]>([]);
+  const podList = useResourceList({ context: tab.context, spec: POD_GVK, selection: tab, pollMs: 10_000 });
+  const nodeList = useResourceList({ context: tab.context, spec: NODE_GVK, selection: tab, pollMs: 10_000 });
+  const pods = podList.items;
+  const nodes = nodeList.items;
   const [nodeUsage, setNodeUsage] = React.useState<NodeUsage[]>([]);
   const [podUsage, setPodUsage] = React.useState<PodUsage[]>([]);
+  const [metricErrors, setMetricErrors] = React.useState<SourceErrors>({});
 
+  // metrics-server has no watch: polled.
   React.useEffect(() => {
     let alive = true;
-    const scope = namespaceScope(tab);
-
-    async function load(first: boolean) {
-      if (first && alive) setLoading(true);
-
-      const [podRes, nodeRes, nodeUseRes, podUseRes] = await Promise.all([
-        (async () => {
-          try {
-            const list = await api.listResources(
-              tab.context,
-              { group: "", version: "v1", kind: "Pod", plural: "pods", namespaced: true },
-              scope.queryNamespace,
-            );
-            return list.filter((o) => scope.matches(o.metadata?.namespace));
-          } catch (e) {
-            useAppStore.getState().reportError(e, tab.context);
-            return null;
-          }
-        })(),
-        (async () => {
-          try {
-            return await api.listResources(tab.context, {
-              group: "",
-              version: "v1",
-              kind: "Node",
-              plural: "nodes",
-              namespaced: false,
-            });
-          } catch (e) {
-            useAppStore.getState().reportError(e, tab.context);
-            return null;
-          }
-        })(),
-        (async () => {
-          try {
-            return await api.nodeUsage(tab.context);
-          } catch (e) {
-            useAppStore.getState().reportError(e, tab.context);
-            return null;
-          }
-        })(),
-        (async () => {
-          try {
-            return await api.podUsage(tab.context, scope.queryNamespace);
-          } catch (e) {
-            useAppStore.getState().reportError(e, tab.context);
-            return null;
-          }
-        })(),
+    async function load() {
+      const failed: SourceErrors = {};
+      const fail = (source: Source, e: unknown) => {
+        failed[source] = errorMessage(e);
+        return null;
+      };
+      const [nodeUse, podUse] = await Promise.all([
+        api.nodeUsage(tab.context).catch((e: unknown) => fail("nodeUsage", e)),
+        fetchScoped(
+          tab.context,
+          tab,
+          { id: "metrics.k8s.io/pods", namespaced: true },
+          "pod metrics",
+          (ns) => api.podUsage(tab.context, ns),
+        ).catch((e: unknown) => fail("podUsage", e)),
       ]);
-
       if (!alive) return;
-      if (podRes) setPods(podRes);
-      if (nodeRes) setNodes(nodeRes);
-      if (nodeUseRes) setNodeUsage(nodeUseRes);
-      if (podUseRes) setPodUsage(podUseRes);
-      if (first) setLoading(false);
+      setMetricErrors(failed);
+      if (nodeUse) setNodeUsage(nodeUse);
+      if (podUse) setPodUsage(podUse);
     }
-
-    void load(true);
-    const id = window.setInterval(() => void load(false), 10_000);
+    void load();
+    const id = window.setInterval(() => void load(), 15_000);
     return () => {
       alive = false;
       window.clearInterval(id);
     };
-  }, [tab.context, tab.namespaceMode, tab.namespaces]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab.context, tab.namespaceMode, tab.namespaces.join(",")]);
+
+  const errors: SourceErrors = {
+    ...(podList.error != null && !isNeedsNamespace(podList.error)
+      ? { pods: errorMessage(podList.error) }
+      : {}),
+    ...(nodeList.error != null ? { nodes: errorMessage(nodeList.error) } : {}),
+    ...metricErrors,
+  };
+  const loading = podList.loading && nodeList.loading;
 
   // -- Derived stats --------------------------------------------------------
   const derived = React.useMemo(() => {
@@ -366,6 +315,13 @@ export function DashboardView({ tab }: { tab: ClusterTab }) {
 
   return (
     <div className="h-full overflow-auto p-3 text-[12px]">
+      {isNeedsNamespace(podList.error) && (
+        <div className="-mx-3 -mt-3 mb-3">
+          <ListError context={tab.context} tabId={tab.id} error={podList.error} label="Pods" />
+        </div>
+      )}
+      <SourceErrorsBanner errors={errors} />
+
       {/* Stat cards ------------------------------------------------------- */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
         <StatCard icon={<Boxes className="size-3.5" />} label="Pods" value={String(pods.length)} />
@@ -571,6 +527,28 @@ function EmptyChart() {
   return (
     <div className="flex h-full items-center justify-center text-[11px] text-muted-foreground">
       No data available
+    </div>
+  );
+}
+
+/** One row per distinct message, listing the sources that failed with it. */
+function SourceErrorsBanner({ errors }: { errors: SourceErrors }) {
+  const groups = new Map<string, string[]>();
+  for (const [source, message] of Object.entries(errors) as [Source, string][]) {
+    groups.set(message, [...(groups.get(message) ?? []), SOURCE_LABELS[source]]);
+  }
+  if (groups.size === 0) return null;
+  return (
+    <div className="mb-3 space-y-1.5 rounded-lg border border-[hsl(var(--warn)/0.4)] bg-[hsl(var(--warn)/0.08)] p-3">
+      {[...groups].map(([message, sources]) => (
+        <div key={message} className="flex items-start gap-2">
+          <TriangleAlert className="mt-0.5 size-3.5 shrink-0" style={{ color: COLORS.warn }} />
+          <p className="min-w-0 select-text break-words text-[11px]">
+            <span className="font-semibold">{sources.join(", ")} unavailable:</span>{" "}
+            <span className="text-muted-foreground">{message}</span>
+          </p>
+        </div>
+      ))}
     </div>
   );
 }

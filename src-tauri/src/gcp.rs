@@ -13,7 +13,15 @@ pub fn gcloud_auth_login() -> AppResult<()> {
     if cfg!(target_os = "windows") {
         let cmd = "gcloud auth login";
         let wt = Command::new("wt.exe")
-            .args(["-w", "0", "nt", "powershell.exe", "-NoExit", "-Command", cmd])
+            .args([
+                "-w",
+                "0",
+                "nt",
+                "powershell.exe",
+                "-NoExit",
+                "-Command",
+                cmd,
+            ])
             .spawn();
         if wt.is_ok() {
             return Ok(());
@@ -42,7 +50,9 @@ pub fn gcloud_auth_login() -> AppResult<()> {
                 return Ok(());
             }
         }
-        Err(AppError::process("No terminal emulator available for gcloud auth."))
+        Err(AppError::process(
+            "No terminal emulator available for gcloud auth.",
+        ))
     }
 }
 

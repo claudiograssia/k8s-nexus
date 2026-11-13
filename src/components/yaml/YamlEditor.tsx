@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Editor, { DiffEditor } from "@monaco-editor/react";
-import { Save, RotateCcw, GitCompareArrows, FileCode2, Loader2 } from "lucide-react";
+import { Save, RotateCcw, GitCompareArrows, FileCode2, Loader2, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
-import type { GvkSpec } from "@/lib/types";
+import { isAppError, type GvkSpec } from "@/lib/types";
 import { useAppStore } from "@/store/useAppStore";
 
 interface Props {
@@ -33,6 +33,8 @@ export function YamlEditor({ context, spec, namespace, name, readOnly, onApplied
   const [mode, setMode] = useState<"edit" | "diff">("edit");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  /** Message of a 409 from the last apply, awaiting the user's decision. */
+  const [conflict, setConflict] = useState<{ message: string; fieldConflict: boolean } | null>(null);
   const pushToast = useAppStore((s) => s.pushToast);
   const reportError = useAppStore((s) => s.reportError);
 
@@ -55,16 +57,22 @@ export function YamlEditor({ context, spec, namespace, name, readOnly, onApplied
 
   const dirty = useMemo(() => value !== original, [value, original]);
 
-  const apply = async () => {
+  const apply = async (force = false) => {
     setSaving(true);
+    setConflict(null);
     try {
-      await api.applyResourceYaml(context, spec, value);
-      pushToast("success", `Applied ${spec.kind}/${name}`);
+      await api.applyResourceYaml(context, spec, value, force);
+      pushToast("success", `${force ? "Force-applied" : "Applied"} ${spec.kind}/${name}`);
       await load();
       setMode("edit");
       onApplied?.();
     } catch (e) {
-      reportError(e, context);
+      if (isAppError(e) && e.kind === "conflict") {
+        // Field conflicts can be forced; "object has been modified" needs a reload.
+        setConflict({ message: e.message, fieldConflict: /conflict with|conflicts with/i.test(e.message) });
+      } else {
+        reportError(e, context);
+      }
     } finally {
       setSaving(false);
     }
@@ -95,12 +103,48 @@ export function YamlEditor({ context, spec, namespace, name, readOnly, onApplied
             <RotateCcw /> Reload
           </Button>
           {!readOnly && (
-            <Button size="xs" onClick={apply} disabled={!dirty || saving}>
+            <Button size="xs" onClick={() => void apply()} disabled={!dirty || saving}>
               {saving ? <Loader2 className="animate-spin" /> : <Save />} Apply
             </Button>
           )}
         </div>
       </div>
+      {conflict && (
+        <div className="border-b border-[hsl(var(--warn)/0.4)] bg-[hsl(var(--warn)/0.08)] px-3 py-2 text-[11px]">
+          <div className="flex items-start gap-2">
+            <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-[hsl(var(--warn))]" />
+            <div className="min-w-0 flex-1">
+              <p className="font-semibold">
+                {conflict.fieldConflict
+                  ? "Some fields are managed by someone else"
+                  : "The object changed on the cluster"}
+              </p>
+              <pre className="mt-1 max-h-32 select-text overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] text-muted-foreground">
+                {conflict.message}
+              </pre>
+              <p className="mt-1 text-muted-foreground">
+                {conflict.fieldConflict
+                  ? "Forcing makes KubeNexus the owner of these fields. The other manager (e.g. Helm, Argo CD, a controller) may revert or fight the change."
+                  : "Reload to get the latest version, then reapply your edits."}
+              </p>
+            </div>
+          </div>
+          <div className="mt-2 flex justify-end gap-1.5">
+            <Button size="xs" variant="outline" onClick={() => setConflict(null)}>
+              Cancel
+            </Button>
+            {conflict.fieldConflict ? (
+              <Button size="xs" variant="destructive" onClick={() => void apply(true)} disabled={saving}>
+                Force apply
+              </Button>
+            ) : (
+              <Button size="xs" onClick={() => void load().then(() => setConflict(null))}>
+                <RotateCcw /> Reload
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
       <div className="relative min-h-0 flex-1">
         {loading ? (
           <div className="flex h-full items-center justify-center">

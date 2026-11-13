@@ -4,11 +4,13 @@
 //! Mode; read operations are always allowed.
 
 use crate::error::{AppError, AppResult};
+use crate::kube::access::AccessCheck;
 use crate::kube::config::KubeconfigSummary;
 use crate::kube::logs::LogRequest;
 use crate::kube::metrics::{NodeUsage, PodUsage};
 use crate::kube::portforward::{PortForwardInfo, PortForwardRequest};
 use crate::kube::resources::GvkSpec;
+use crate::kube::watch::WatchRequest;
 use crate::state::AppState;
 use crate::{gcp, terminal};
 use serde_json::Value;
@@ -37,14 +39,21 @@ pub struct ToolStatus {
 
 fn tool_present(program: &str, args: &[&str]) -> bool {
     // `.output()` is Ok only if the binary was found and executed.
-    std::process::Command::new(program).args(args).output().is_ok()
+    std::process::Command::new(program)
+        .args(args)
+        .output()
+        .is_ok()
 }
 
 #[tauri::command]
 pub async fn check_tools() -> AppResult<ToolStatus> {
     tokio::task::spawn_blocking(|| {
         // On Windows `gcloud` is a `.cmd`; CreateProcess only auto-appends `.exe`.
-        let gcloud_bin = if cfg!(target_os = "windows") { "gcloud.cmd" } else { "gcloud" };
+        let gcloud_bin = if cfg!(target_os = "windows") {
+            "gcloud.cmd"
+        } else {
+            "gcloud"
+        };
         ToolStatus {
             kubectl: tool_present("kubectl", &["version", "--client"]),
             gcloud: tool_present(gcloud_bin, &["version"]),
@@ -90,6 +99,7 @@ pub async fn list_resources(
     spec: GvkSpec,
     namespace: Option<String>,
     label_selector: Option<String>,
+    field_selector: Option<String>,
 ) -> AppResult<Vec<Value>> {
     let st = state.inner().clone();
     crate::kube::resources::list(
@@ -98,8 +108,45 @@ pub async fn list_resources(
         &spec,
         namespace.as_deref(),
         label_selector.as_deref(),
+        field_selector.as_deref(),
     )
     .await
+}
+
+#[tauri::command]
+pub async fn discover_resources(
+    state: State<'_, AppState>,
+    context: String,
+) -> AppResult<crate::kube::discovery::DiscoveryResult> {
+    let st = state.inner().clone();
+    crate::kube::discovery::discover(&st.clients, &context).await
+}
+
+#[tauri::command]
+pub async fn check_access(
+    state: State<'_, AppState>,
+    context: String,
+    checks: Vec<AccessCheck>,
+) -> AppResult<Vec<Option<bool>>> {
+    let st = state.inner().clone();
+    crate::kube::access::check(&st.clients, &context, checks).await
+}
+
+#[tauri::command]
+pub async fn start_watch(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    watch_id: String,
+    request: WatchRequest,
+) -> AppResult<()> {
+    let st = state.inner().clone();
+    crate::kube::watch::start(app, &st.clients, &st.watches, watch_id, request).await
+}
+
+#[tauri::command]
+pub async fn stop_watch(state: State<'_, AppState>, watch_id: String) -> AppResult<()> {
+    state.watches.stop(&watch_id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -134,10 +181,12 @@ pub async fn apply_resource_yaml(
     context: String,
     spec: GvkSpec,
     yaml: String,
+    force: Option<bool>,
 ) -> AppResult<Value> {
     state.ensure_writable(&context)?;
     let st = state.inner().clone();
-    crate::kube::resources::apply_yaml(&st.clients, &context, &spec, &yaml).await
+    crate::kube::resources::apply_yaml(&st.clients, &context, &spec, &yaml, force.unwrap_or(false))
+        .await
 }
 
 #[tauri::command]
@@ -329,10 +378,15 @@ pub async fn pty_open_exec(
     container: Option<String>,
     mode: String,
     shell: Option<String>,
+    image: Option<String>,
     kubeconfig: Option<String>,
     rows: u16,
     cols: u16,
 ) -> AppResult<()> {
+    // A debug container modifies the pod (ephemeralcontainers subresource).
+    if mode == "debug" {
+        state.ensure_writable(&context)?;
+    }
     state.pty.open_exec(
         app,
         id,
@@ -342,6 +396,7 @@ pub async fn pty_open_exec(
         container.as_deref(),
         &mode,
         shell.as_deref(),
+        image.as_deref(),
         kubeconfig.as_deref(),
         rows,
         cols,
@@ -394,7 +449,14 @@ pub async fn pod_write_file(
 ) -> AppResult<()> {
     state.ensure_writable(&context)?;
     tokio::task::spawn_blocking(move || {
-        crate::pod_fs::write_file(&context, &namespace, &pod, container.as_deref(), &path, &content)
+        crate::pod_fs::write_file(
+            &context,
+            &namespace,
+            &pod,
+            container.as_deref(),
+            &path,
+            &content,
+        )
     })
     .await
     .map_err(|e| AppError::internal(e.to_string()))?
